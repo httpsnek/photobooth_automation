@@ -5,6 +5,7 @@
   --pink: #D6256E;        /* sampled from the client's InstaBOX video */
   --pink-soft: #F7DCE8;
   --muted: #8a8a8e;
+  --warn: #e08a00;
   --warn-bg: #fff3e0;
 
   /* one knob for "how big is the hero element" (QR / badge), clamped to both axes */
@@ -86,22 +87,33 @@ html, body {
   position: fixed;
   inset: 0;
   display: flex;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
+  gap: min(4vh, 34px);
+  padding: min(22vh, 150px) 8vw min(8vh, 60px);
+  text-align: center;
 }
+#screen > [hidden] { display: none; }
+
+.copy {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: min(1.6vh, 14px);
+}
+
 .screen {
-  display: none;
   flex-direction: column;
   align-items: center;
   justify-content: center;
   gap: min(3.2vh, 26px);
-  padding: min(22vh, 150px) 8vw min(8vh, 60px);
   text-align: center;
   width: 100%;
-  height: 100%;
   opacity: 1; /* never depend on animation frames for visibility */
 }
-.screen.active { display: flex; }
+.screen[hidden] { display: none; }
+.screen:not([hidden]) { display: flex; }
 
 /* ── typography ─────────────────────────────────────────── */
 .headline {
@@ -170,28 +182,22 @@ html, body {
 }
 @keyframes badge-in { from { transform: scale(.86); } to { transform: scale(1); } }
 
+.badge[hidden] { display: none; }
 .badge--ok {
   background: var(--pink);
   color: #fff;
   box-shadow: 0 0 0 calc(var(--hero) * 0.12) var(--pink-soft);
 }
-.badge--pink { background: var(--pink-soft); }
-.badge--warn { background: var(--warn-bg); }
+.badge--pink { background: var(--pink-soft); color: var(--pink); }
+.badge--warn { background: var(--warn-bg); color: var(--warn); }
 
-.badge.emoji { font-size: calc(var(--hero) * 0.34); }
-
-.tick {
-  width: 56%;
-  height: 56%;
+/* morph-icon renders a plain <svg> child (display:contents on the host) */
+#badge svg {
+  width: 52%;
+  height: 52%;
+  stroke: currentColor;
   fill: none;
-  stroke: #fff;
-  stroke-width: 11;
-  stroke-linecap: round;
-  stroke-linejoin: round;
 }
-
-.emoji { animation: badge-in .45s cubic-bezier(.2, .9, .3, 1.2), bob 1.6s ease-in-out .5s infinite; }
-@keyframes bob { 0%, 100% { translate: 0 0; } 50% { translate: 0 -4%; } }
 
 /* ── loader ─────────────────────────────────────────────── */
 .loader {
