@@ -1,0 +1,9 @@
+fastapi>=0.110
+uvicorn[standard]>=0.29
+httpx>=0.27
+aiosqlite>=0.20
+jinja2>=3.1
+python-dotenv>=1.0
+qrcode[pil]>=7.4
+# Windows-only, used by the hotkey dslrBooth trigger. Skipped on macOS/Linux dev.
+pyautogui>=0.9.54 ; platform_system == "Windows"

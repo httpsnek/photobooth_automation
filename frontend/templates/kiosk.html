@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="uk">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+  <title>InstaBOX</title>
+  <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body
+  data-attract-video="{{ attract_video }}"
+  data-paid-video="{{ paid_video }}"
+  data-qr-left="{{ qr_left_pct }}"
+  data-qr-top="{{ qr_top_pct }}"
+  data-qr-size="{{ qr_size_pct }}">
+
+  <!-- ── Video layer: the client's branded animation, shown for AWAITING_PAYMENT
+       and PAID when a video file is configured. The live QR is a real element
+       laid over the video, never baked in. ─────────────────────────────────── -->
+  <div id="video-stage" hidden>
+    <div id="video-box">
+      <video id="clip" muted playsinline preload="auto"></video>
+      <img id="qr-overlay" alt="QR-код для оплати" hidden>
+    </div>
+  </div>
+
+  <!-- ── HTML layer: fallback if the video can't play, and the UI for every
+       state the video doesn't cover (shooting / printing / done / errors). ── -->
+  <header class="brand">
+    <img src="/static/img/logo.svg" alt="InstaBOX" class="logo"
+         onerror="this.remove();document.getElementById('logo-fallback').hidden=false">
+    <div id="logo-fallback" class="logo-fallback" hidden>
+      <span class="lf-insta">Insta</span><span class="lf-box">BOX</span>
+    </div>
+  </header>
+
+  <main id="screen">
+
+    <section class="screen" data-state="CONNECTING">
+      <div class="loader"></div>
+      <p class="muted">Завантаження…</p>
+    </section>
+
+    <section class="screen" data-state="AWAITING_PAYMENT">
+      <div class="pricing">
+        <span class="pricing__shots">{{ shots }} фото</span>
+        <span class="pricing__sep"></span>
+        <span class="pricing__price"><span id="price-value">{{ price }}</span> грн</span>
+      </div>
+      <h1 class="headline">Відскануй QR-код<br>для оплати</h1>
+      <div class="qr-frame"><img id="qr" alt="QR-код для оплати" /></div>
+      <p class="foot">Наведи камеру телефона на QR-код<br>та оплати фотосесію</p>
+    </section>
+
+    <section class="screen" data-state="PAID">
+      <div class="badge badge--ok">
+        <svg viewBox="0 0 100 100" class="tick" aria-hidden="true">
+          <polyline points="24,52 43,71 77,33"></polyline>
+        </svg>
+      </div>
+      <h1 class="headline">Оплату отримано</h1>
+    </section>
+
+    <section class="screen" data-state="SHOOTING">
+      <div class="badge badge--pink emoji">📸</div>
+      <h1 class="headline">Дивіться в камеру!</h1>
+      <p class="muted">Робимо <span id="shots-count">{{ shots }}</span> кадри поспіль</p>
+    </section>
+
+    <section class="screen" data-state="PRINTING">
+      <div class="badge badge--pink emoji">🖨️</div>
+      <h1 class="headline">Друкуємо ваше фото…</h1>
+    </section>
+
+    <section class="screen" data-state="DONE">
+      <div class="badge badge--ok">
+        <svg viewBox="0 0 100 100" class="tick" aria-hidden="true">
+          <polyline points="24,52 43,71 77,33"></polyline>
+        </svg>
+      </div>
+      <h1 class="headline">Готово!</h1>
+      <p class="muted">Забирайте фото знизу</p>
+    </section>
+
+    <section class="screen" data-state="REFUNDING">
+      <div class="loader"></div>
+      <h1 class="headline">Повертаємо кошти…</h1>
+    </section>
+
+    <section class="screen" data-state="REFUNDED">
+      <div class="badge badge--warn emoji">↺</div>
+      <h1 class="headline">Сталася помилка</h1>
+      <p class="muted">Кошти повернено на картку</p>
+    </section>
+
+    <section class="screen" data-state="OUT_OF_SERVICE">
+      <div class="badge badge--warn emoji">🛠️</div>
+      <h1 class="headline">Тимчасово<br>не працює</h1>
+    </section>
+
+  </main>
+
+  <div id="timer" class="timer" hidden></div>
+
+  <script src="/static/js/kiosk.js"></script>
+</body>
+</html>

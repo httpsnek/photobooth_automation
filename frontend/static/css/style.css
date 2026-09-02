@@ -1,0 +1,209 @@
+/* InstaBOX kiosk — light theme, brand pink. Single committed look (white bg). */
+:root {
+  --bg: #ffffff;
+  --ink: #141414;
+  --pink: #E6187C;
+  --pink-soft: #FBE3EF;
+  --muted: #8a8a8e;
+  --warn-bg: #fff3e0;
+
+  /* one knob for "how big is the hero element" (QR / badge), clamped to both axes */
+  --hero: min(58vw, 42vh, 380px);
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+html, body {
+  height: 100%;
+  background: var(--bg);
+  color: var(--ink);
+  font-family: "Montserrat", -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
+  overflow: hidden;
+}
+
+/* ── video layer ────────────────────────────────────────── */
+#video-stage {
+  position: fixed;
+  inset: 0;
+  background: #fff;
+  z-index: 5;
+}
+#video-stage[hidden] { display: none; }
+#video-box {
+  position: relative;
+  width: 100%;
+  height: 100%;
+}
+#clip {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  background: #fff;
+}
+.qr-overlay {
+  position: absolute;
+  translate: -50% -50%;
+  background: #fff;
+  border-radius: 6%;
+  /* left / top / width set in JS to match the painted video rect */
+}
+.qr-overlay[hidden] { display: none; }
+
+/* ── brand header ───────────────────────────────────────── */
+.brand {
+  position: fixed;
+  top: 0; left: 0; right: 0;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  padding: min(6vh, 40px) 4vw 0;
+  z-index: 2;
+  pointer-events: none;
+}
+.logo { height: min(9vh, 64px); width: auto; }
+.logo-fallback {
+  font-weight: 800;
+  font-size: min(7vw, 44px);
+  letter-spacing: -0.01em;
+}
+.logo-fallback .lf-insta { color: var(--pink); font-style: italic; }
+.logo-fallback .lf-box   { color: var(--ink); }
+
+/* ── screen switcher ────────────────────────────────────── */
+#screen {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.screen {
+  display: none;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: min(3.2vh, 26px);
+  padding: min(22vh, 150px) 8vw min(8vh, 60px);
+  text-align: center;
+  width: 100%;
+  height: 100%;
+  opacity: 1; /* never depend on animation frames for visibility */
+}
+.screen.active { display: flex; }
+
+/* ── typography ─────────────────────────────────────────── */
+.headline {
+  font-weight: 800;
+  font-size: min(8vw, 6vh, 46px);
+  line-height: 1.14;
+  color: var(--ink);
+}
+.muted {
+  font-weight: 600;
+  font-size: min(4.6vw, 3.4vh, 24px);
+  color: var(--muted);
+}
+.foot {
+  font-weight: 700;
+  font-size: min(3.8vw, 2.6vh, 19px);
+  line-height: 1.4;
+  color: var(--ink);
+}
+.foot--en {
+  font-weight: 500;
+  font-size: min(3vw, 2vh, 15px);
+  color: var(--muted);
+}
+
+/* ── pricing row ────────────────────────────────────────── */
+.pricing {
+  display: flex;
+  align-items: center;
+  gap: min(5vw, 30px);
+  font-weight: 800;
+  font-size: min(7vw, 5vh, 40px);
+}
+.pricing__shots { color: var(--ink); }
+.pricing__price { color: var(--pink); }
+.pricing__sep {
+  width: 3px;
+  height: 1.1em;
+  border-radius: 3px;
+  background: #d6d6d6;
+}
+
+/* ── QR ─────────────────────────────────────────────────── */
+.qr-frame {
+  background: #fff;
+  border: min(1.4vw, 9px) solid var(--pink);
+  border-radius: min(6vw, 40px);
+  padding: min(4vw, 26px);
+  line-height: 0;
+}
+.qr-frame img {
+  width: var(--hero);
+  height: var(--hero);
+  image-rendering: pixelated;
+}
+
+/* ── badges (PAID / SHOOTING / errors) ──────────────────── */
+.badge {
+  width: calc(var(--hero) * 0.72);
+  height: calc(var(--hero) * 0.72);
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  transform: scale(1);
+  animation: badge-in .45s cubic-bezier(.2, .9, .3, 1.2);
+}
+@keyframes badge-in { from { transform: scale(.86); } to { transform: scale(1); } }
+
+.badge--ok {
+  background: var(--pink);
+  color: #fff;
+  box-shadow: 0 0 0 calc(var(--hero) * 0.12) var(--pink-soft);
+}
+.badge--pink { background: var(--pink-soft); }
+.badge--warn { background: var(--warn-bg); }
+
+.badge.emoji { font-size: calc(var(--hero) * 0.34); }
+
+.tick {
+  width: 56%;
+  height: 56%;
+  fill: none;
+  stroke: #fff;
+  stroke-width: 11;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.emoji { animation: badge-in .45s cubic-bezier(.2, .9, .3, 1.2), bob 1.6s ease-in-out .5s infinite; }
+@keyframes bob { 0%, 100% { translate: 0 0; } 50% { translate: 0 -4%; } }
+
+/* ── loader ─────────────────────────────────────────────── */
+.loader {
+  width: min(16vw, 12vh, 90px);
+  height: min(16vw, 12vh, 90px);
+  border: min(2vw, 10px) solid var(--pink-soft);
+  border-top-color: var(--pink);
+  border-radius: 50%;
+  animation: spin .9s linear infinite;
+}
+@keyframes spin { to { rotate: 360deg; } }
+
+/* ── countdown ──────────────────────────────────────────── */
+.timer {
+  position: fixed;
+  bottom: min(5vh, 44px);
+  left: 50%;
+  translate: -50% 0;
+  font-weight: 800;
+  font-size: min(6vw, 4vh, 34px);
+  color: var(--muted);
+}
+.timer[hidden] { display: none; }
