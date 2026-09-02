@@ -87,7 +87,7 @@
   }
 
   // ── video ──
-  var CLIP_POS_Y = 0.55;  // must match --clip-pos-y in style.css
+  var CLIP_POS_Y = 0.42;  // must match --clip-pos-y in style.css
 
   function layoutOverlay() {
     if (!clip.videoWidth || !clip.videoHeight) return;
@@ -137,17 +137,33 @@
     }
   });
 
+  // restart the CSS entrance animation on a container's children
+  function replayIntro(container) {
+    var kids = [].slice.call(container.children);
+    kids.forEach(function (el) { el.style.opacity = ""; el.style.transform = ""; el.style.animation = "none"; });
+    void container.offsetWidth;  // force reflow
+    kids.forEach(function (el) { el.style.animation = ""; });
+  }
+
   // ── HTML layer rendering ──
   function showHtmlLayer(cfg, st) {
     hideVideo();
 
     // awaiting (pricing + QR) vs badge/loader + copy
+    var enteringAwaiting = cfg.awaiting && awaiting.hidden;
     awaiting.hidden = !cfg.awaiting;
     if (cfg.awaiting) {
       badge.hidden = true; loader.hidden = true; copy.hidden = true;
       if (lastQrDataUri) qrEl.src = lastQrDataUri;
       if (priceEl && PRICE) priceEl.textContent = PRICE;
       if (shotsPriceEl) shotsPriceEl.textContent = SHOTS;
+      if (enteringAwaiting) replayIntro(awaiting);
+      // safety: whatever the entrance animation does, elements must end visible
+      setTimeout(function () {
+        [].forEach.call(awaiting.children, function (el) {
+          el.style.opacity = "1"; el.style.transform = "none";
+        });
+      }, 900);
       return;
     }
 
@@ -261,58 +277,74 @@
 
   // ── Demo mode (no SSE) ──────────────────────────────────
   //   ?demo=STATE   freeze on one screen  (design / QR calibration)
-  //   ?demo         tour: tap / click / → advances through every screen
+  //   ?demo         click / tap / → steps through every screen
+  //   ?demo=auto    auto-plays through every screen on a loop
   var params = new URLSearchParams(location.search);
   if (params.has("demo")) {
     var one = params.get("demo");
     var qrSrc = "/qr?text=" + encodeURIComponent("https://instabox.example/demo");
+    lastQrDataUri = qrSrc;
 
-    if (one) {
-      lastQrDataUri = qrSrc;
+    var TOUR = ["CONNECTING", "AWAITING_PAYMENT", "PAID", "SHOOTING",
+                "PRINTING", "DONE", "REFUNDING", "REFUNDED", "OUT_OF_SERVICE"];
+
+    if (one && one !== "auto") {
       render({ state: one.toUpperCase(), price: PRICE, shots: SHOTS, seconds_left: 12 });
       return;
     }
 
-    // ?demo        -> auto-plays every screen on a loop
-    // ?demo=click  -> tap / click / → to advance
-    var manual = one === "click";
-    var TOUR = ["CONNECTING", "AWAITING_PAYMENT", "PAID", "SHOOTING",
-                "PRINTING", "DONE", "REFUNDING", "REFUNDED", "OUT_OF_SERVICE"];
-    var HOLD = { AWAITING_PAYMENT: 4600, PAID: 6000 };  // let the videos run
+    var auto = one === "auto";
+    var HOLD = { AWAITING_PAYMENT: 4600, PAID: 5200 };  // give the video time
     var ti = 0;
-    lastQrDataUri = qrSrc;
 
-    var hint = document.createElement("div");
-    hint.style.cssText = "position:fixed;left:50%;bottom:2vh;translate:-50% 0;z-index:99;" +
-      "font:600 13px/1 system-ui,sans-serif;color:#b9b9bd;background:#fff;padding:7px 14px;" +
-      "border-radius:999px;box-shadow:0 2px 12px rgba(0,0,0,.12);pointer-events:none;white-space:nowrap";
-    document.body.appendChild(hint);
+    var bar = document.createElement("div");
+    bar.style.cssText = "position:fixed;left:50%;bottom:3vh;translate:-50% 0;z-index:99;" +
+      "display:flex;align-items:center;gap:10px;font:600 15px/1 system-ui,sans-serif";
+    function mkBtn(txt) {
+      var b = document.createElement("button");
+      b.textContent = txt;
+      b.style.cssText = "border:0;border-radius:999px;padding:12px 22px;font:inherit;" +
+        "background:#16151a;color:#fff;box-shadow:0 4px 18px rgba(0,0,0,.18);cursor:pointer";
+      return b;
+    }
+    var prevBtn = mkBtn("‹");
+    var label = document.createElement("span");
+    label.style.cssText = "color:#a9a9b1;min-width:150px;text-align:center;white-space:nowrap";
+    var nextBtn = mkBtn("Далі →");
+    nextBtn.style.whiteSpace = "nowrap";
+    bar.append(prevBtn, label, nextBtn);
+    if (auto) bar.style.display = "none";
+    document.body.appendChild(bar);
+    var timerEl2 = document.getElementById("timer");
 
-    var timer = null;
-    function step() {
-      var st = TOUR[ti % TOUR.length];
-      hint.textContent = (ti % TOUR.length + 1) + " / " + TOUR.length + "  ·  " + st +
-        (manual ? "  ·  тап →" : "");
+    var autoTimer = null;
+    function show() {
+      var n = ((ti % TOUR.length) + TOUR.length) % TOUR.length;
+      var st = TOUR[n];
+      label.textContent = (n + 1) + " / " + TOUR.length + "  ·  " + st;
       render({ state: st, price: PRICE, shots: SHOTS, seconds_left: 12 });
-      ti++;
-      if (!manual) {
-        clearTimeout(timer);
-        timer = setTimeout(step, HOLD[st] || 2800);
+      timerEl2.hidden = true;                       // demo bar owns that spot
+      if (auto) {
+        clearTimeout(autoTimer);
+        autoTimer = setTimeout(function () { ti++; show(); }, HOLD[st] || 2800);
       }
     }
-    step();
+    show();
 
-    if (manual) {
-      var last = 0;
-      var advance = function (e) {
-        if (e.type === "keydown" && e.key !== "ArrowRight" && e.key !== " " && e.key !== "Enter") return;
-        if (Date.now() - last < 450) return;
-        last = Date.now();
-        step();
-      };
-      document.addEventListener("pointerup", advance);
-      document.addEventListener("keydown", advance);
+    var lastNav = 0;
+    function nav(dir) {                             // collapse duplicate taps
+      var now = Date.now();
+      if (now - lastNav < 350) return;
+      lastNav = now;
+      ti += dir;
+      show();
     }
+    nextBtn.addEventListener("click", function () { nav(1); });
+    prevBtn.addEventListener("click", function () { nav(-1); });
+    window.addEventListener("keydown", function (e) {
+      if (e.key === "ArrowRight" || e.key === " ") nav(1);
+      else if (e.key === "ArrowLeft") nav(-1);
+    });
     return;
   }
 
