@@ -86,6 +86,13 @@ async def kiosk(request: Request) -> HTMLResponse:
     )
 
 
+@app.get("/qr")
+async def qr(text: str = "https://instabox.example/demo") -> Response:
+    from .qr import qr_png
+    return Response(qr_png(text[:512]), media_type="image/png",
+                    headers={"Cache-Control": "public, max-age=300"})
+
+
 @app.get("/events")
 async def events(request: Request) -> StreamingResponse:
     broadcaster: Broadcaster = app.state.broadcaster

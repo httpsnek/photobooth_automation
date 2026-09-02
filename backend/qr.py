@@ -8,8 +8,8 @@ from functools import lru_cache
 import qrcode
 
 
-@lru_cache(maxsize=8)
-def qr_data_uri(text: str) -> str:
+@lru_cache(maxsize=16)
+def qr_png(text: str) -> bytes:
     qr = qrcode.QRCode(
         version=None,
         error_correction=qrcode.constants.ERROR_CORRECT_M,
@@ -21,5 +21,9 @@ def qr_data_uri(text: str) -> str:
     img = qr.make_image(fill_color="black", back_color="white")
     buf = io.BytesIO()
     img.save(buf, format="PNG")
-    b64 = base64.b64encode(buf.getvalue()).decode("ascii")
+    return buf.getvalue()
+
+
+def qr_data_uri(text: str) -> str:
+    b64 = base64.b64encode(qr_png(text)).decode("ascii")
     return f"data:image/png;base64,{b64}"

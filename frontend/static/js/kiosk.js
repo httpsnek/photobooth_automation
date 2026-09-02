@@ -230,10 +230,60 @@
     };
   }
 
-  // ?demo=STATE freezes the kiosk on one screen (no SSE) — for design / calibration.
-  var demo = new URLSearchParams(location.search).get("demo");
-  if (demo) {
-    render({ state: demo.toUpperCase(), price: PRICE, shots: SHOTS, seconds_left: 12 });
+  // ── Demo mode (no SSE) ──────────────────────────────────
+  //   ?demo=STATE   freeze on one screen  (design / QR calibration)
+  //   ?demo         tour: tap / click / → advances through every screen
+  var params = new URLSearchParams(location.search);
+  if (params.has("demo")) {
+    var one = params.get("demo");
+    var qrSrc = "/qr?text=" + encodeURIComponent("https://instabox.example/demo");
+
+    if (one) {
+      lastQrDataUri = qrSrc;
+      render({ state: one.toUpperCase(), price: PRICE, shots: SHOTS, seconds_left: 12 });
+      return;
+    }
+
+    // ?demo        -> auto-plays every screen on a loop
+    // ?demo=click  -> tap / click / → to advance
+    var manual = one === "click";
+    var TOUR = ["CONNECTING", "AWAITING_PAYMENT", "PAID", "SHOOTING",
+                "PRINTING", "DONE", "REFUNDING", "REFUNDED", "OUT_OF_SERVICE"];
+    var HOLD = { AWAITING_PAYMENT: 4600, PAID: 6000 };  // let the videos run
+    var ti = 0;
+    lastQrDataUri = qrSrc;
+
+    var hint = document.createElement("div");
+    hint.style.cssText = "position:fixed;left:50%;bottom:2vh;translate:-50% 0;z-index:99;" +
+      "font:600 13px/1 system-ui,sans-serif;color:#b9b9bd;background:#fff;padding:7px 14px;" +
+      "border-radius:999px;box-shadow:0 2px 12px rgba(0,0,0,.12);pointer-events:none;white-space:nowrap";
+    document.body.appendChild(hint);
+
+    var timer = null;
+    function step() {
+      var st = TOUR[ti % TOUR.length];
+      hint.textContent = (ti % TOUR.length + 1) + " / " + TOUR.length + "  ·  " + st +
+        (manual ? "  ·  тап →" : "");
+      render({ state: st, price: PRICE, shots: SHOTS, seconds_left: 12 });
+      ti++;
+      if (!manual) {
+        clearTimeout(timer);
+        timer = setTimeout(step, HOLD[st] || 2800);
+      }
+    }
+    step();
+
+    if (manual) {
+      var last = 0;
+      var advance = function (e) {
+        if (e.type === "keydown" && e.key !== "ArrowRight" && e.key !== " " && e.key !== "Enter") return;
+        if (Date.now() - last < 450) return;
+        last = Date.now();
+        step();
+      };
+      document.addEventListener("pointerup", advance);
+      document.addEventListener("keydown", advance);
+    }
     return;
   }
 
