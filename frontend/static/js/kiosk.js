@@ -33,7 +33,7 @@
     REFUNDED:         { icon: "undo", badge: "warn", headline: "Сталася помилка", sub: "Кошти повернено на картку" },
     OUT_OF_SERVICE:   { icon: "wrench", badge: "warn", headline: "Тимчасово не працює" }
   };
-  var COUNTDOWN_STATES = { SHOOTING: 1, PRINTING: 1, DONE: 1, REFUNDED: 1 };
+  var COUNTDOWN_STATES = { SHOOTING: 1, PRINTING: 1 };
 
   // ── Elements ──
   var brand = document.querySelector(".brand");
@@ -44,6 +44,7 @@
   var copy = document.getElementById("copy");
   var headlineEl = document.getElementById("headline");
   var subtextEl = document.getElementById("subtext");
+  var shotsProgress = document.getElementById("shots-progress");
   var awaiting = document.getElementById("awaiting");
   var timerEl = document.getElementById("timer");
   var qrEl = document.getElementById("qr");
@@ -86,12 +87,14 @@
   }
 
   // ── video ──
+  var CLIP_POS_Y = 0.55;  // must match --clip-pos-y in style.css
+
   function layoutOverlay() {
     if (!clip.videoWidth || !clip.videoHeight) return;
     var box = videoBox.getBoundingClientRect();
     var scale = Math.min(box.width / clip.videoWidth, box.height / clip.videoHeight);
     var pw = clip.videoWidth * scale, ph = clip.videoHeight * scale;
-    var offX = (box.width - pw) / 2, offY = (box.height - ph) / 2;
+    var offX = (box.width - pw) / 2, offY = (box.height - ph) * CLIP_POS_Y;
     qrOverlay.style.width = (pw * (QR_SIZE / 100)) + "px";
     qrOverlay.style.height = (ph * (QR_HEIGHT / 100)) + "px";
     qrOverlay.style.left = (offX + pw * (QR_LEFT / 100)) + "px";
@@ -104,15 +107,13 @@
     if (clip.dataset.src !== src) { clip.dataset.src = src; clip.src = src; clip.load(); }
     clip.loop = !!loop;
     stage.hidden = false;
-    brand.style.display = "none";
-    screenLayer.style.display = "none";
+    screenLayer.style.display = "none";  // logo header stays — one fixed position
     var p = clip.play();
     if (p && p.catch) p.catch(function () {});
   }
   function hideVideo() {
     wantVideo = false;
     if (!stage.hidden) { stage.hidden = true; try { clip.pause(); } catch (e) {} }
-    brand.style.display = "";
     screenLayer.style.display = "";
   }
   clip.addEventListener("loadedmetadata", layoutOverlay);
@@ -202,9 +203,37 @@
     qrOverlay.hidden = true;
     showHtmlLayer(cfg, st);
 
+    if (st === "SHOOTING" && state !== "SHOOTING") shotDots(SHOTS, snap.seconds_left || 30);
+    else if (st !== "SHOOTING") clearShotDots();
+
     if (COUNTDOWN_STATES[st]) startCountdown(snap.seconds_left);
     else stopCountdown();
     state = st;
+  }
+
+  // ── shot progress: N dots fill one-by-one across the shooting window ──
+  //   Approximate (no per-shot signal without dslrBooth Pro) — the real
+  //   3·2·1 per frame shows on the camera screen.
+  var shotTimers = [];
+  function clearShotDots() {
+    shotTimers.forEach(clearTimeout);
+    shotTimers = [];
+    shotsProgress.hidden = true;
+    shotsProgress.innerHTML = "";
+  }
+  function shotDots(n, seconds) {
+    clearShotDots();
+    shotsProgress.hidden = false;
+    for (var i = 0; i < n; i++) shotsProgress.appendChild(document.createElement("i"));
+    var dots = shotsProgress.children;
+    var gap = (seconds * 1000) / n;
+    for (var k = 0; k < n; k++) {
+      (function (idx) {
+        shotTimers.push(setTimeout(function () {
+          if (dots[idx]) dots[idx].classList.add("on");
+        }, Math.round(gap * (idx + 0.55))));
+      })(k);
+    }
   }
 
   // ── SSE ──

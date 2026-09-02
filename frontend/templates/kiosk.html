@@ -41,13 +41,15 @@
 
     <!-- one badge, morphs between states -->
     <div id="badge" class="badge" hidden>
-      <morph-icon id="badge-icon" stroke-width="1.7" spring="smooth" reduced-motion="never"></morph-icon>
+      <morph-icon id="badge-icon" stroke-width="1.5" absolute-stroke-width
+                  spring="smooth" reduced-motion="never"></morph-icon>
     </div>
     <div id="loader" class="loader" hidden></div>
 
     <div id="copy" class="copy" hidden>
       <h1 id="headline" class="headline"></h1>
       <p id="subtext" class="muted" hidden></p>
+      <div id="shots-progress" class="shots-progress" hidden></div>
     </div>
 
     <!-- AWAITING_PAYMENT keeps its own richer layout (pricing + QR) -->
