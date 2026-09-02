@@ -160,7 +160,7 @@ html, body {
 .qr-frame {
   background: #fff;
   border: min(1.4vw, 9px) solid var(--pink);
-  border-radius: min(6vw, 40px);
+  border-radius: min(8vw, 40px);
   padding: min(4vw, 26px);
   line-height: 0;
 }
