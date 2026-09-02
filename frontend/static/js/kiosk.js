@@ -5,8 +5,10 @@
   var ATTRACT_VIDEO = body.dataset.attractVideo || "";
   var PAID_VIDEO = body.dataset.paidVideo || "";
   var QR_LEFT = parseFloat(body.dataset.qrLeft) || 50;
-  var QR_TOP = parseFloat(body.dataset.qrTop) || 68;
-  var QR_SIZE = parseFloat(body.dataset.qrSize) || 26;
+  var QR_TOP = parseFloat(body.dataset.qrTop) || 66.34;
+  var QR_SIZE = parseFloat(body.dataset.qrSize) || 24;
+  var QR_HEIGHT = parseFloat(body.dataset.qrHeight) || 37.5;
+  var QR_RADIUS = parseFloat(body.dataset.qrRadius) || 1.6;
 
   var screens = {};
   document.querySelectorAll(".screen").forEach(function (el) {
@@ -24,6 +26,7 @@
   var videoBox = document.getElementById("video-box");
   var clip = document.getElementById("clip");
   var qrOverlay = document.getElementById("qr-overlay");
+  var qrOverlayImg = document.getElementById("qr-overlay-img");
 
   var COUNTDOWN_STATES = ["SHOOTING", "PRINTING", "DONE", "REFUNDED"];
   var current = null;
@@ -66,11 +69,11 @@
     var scale = Math.min(box.width / clip.videoWidth, box.height / clip.videoHeight);
     var pw = clip.videoWidth * scale, ph = clip.videoHeight * scale;
     var offX = (box.width - pw) / 2, offY = (box.height - ph) / 2;
-    var size = pw * (QR_SIZE / 100);
-    qrOverlay.style.width = size + "px";
-    qrOverlay.style.height = size + "px";
+    qrOverlay.style.width = (pw * (QR_SIZE / 100)) + "px";
+    qrOverlay.style.height = (ph * (QR_HEIGHT / 100)) + "px";
     qrOverlay.style.left = (offX + pw * (QR_LEFT / 100)) + "px";
     qrOverlay.style.top = (offY + ph * (QR_TOP / 100)) + "px";
+    qrOverlay.style.borderRadius = (pw * (QR_RADIUS / 100)) + "px";
   }
 
   function playVideo(file, loop) {
@@ -108,15 +111,22 @@
   });
   window.addEventListener("resize", layoutOverlay);
 
-  // autoplay watchdog — kiosk browsers sometimes need a nudge
+  // A non-looping clip is meant to freeze on its last frame — don't let the
+  // watchdog restart it. Only nudge a clip that stalled mid-playback.
+  function stalledMidway() {
+    return wantVideo && clip.paused && !clip.ended && !clip.loop &&
+           clip.currentTime < (clip.duration || Infinity) - 0.05;
+  }
   setInterval(function () {
-    if (wantVideo && clip.paused) {
+    if (stalledMidway() || (wantVideo && clip.loop && clip.paused)) {
       var p = clip.play();
       if (p && p.catch) p.catch(function () {});
     }
   }, 3000);
   document.addEventListener("visibilitychange", function () {
-    if (!document.hidden && wantVideo) clip.play().catch(function () {});
+    if (!document.hidden && (stalledMidway() || (wantVideo && clip.loop && clip.paused))) {
+      clip.play().catch(function () {});
+    }
   });
 
   // ── Render ────────────────────────────────────────────────
@@ -136,9 +146,10 @@
     if (st === "AWAITING_PAYMENT") {
       stopCountdown();
       if (ATTRACT_VIDEO && !videoBroken) {
-        playVideo(ATTRACT_VIDEO, true);
+        // play the entrance once, then hold on the last (static) frame
+        playVideo(ATTRACT_VIDEO, false);
         if (lastQrDataUri) {
-          qrOverlay.src = lastQrDataUri;
+          qrOverlayImg.src = lastQrDataUri;
           qrOverlay.hidden = false;
         }
         layoutOverlay();

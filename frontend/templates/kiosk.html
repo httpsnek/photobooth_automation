@@ -11,7 +11,9 @@
   data-paid-video="{{ paid_video }}"
   data-qr-left="{{ qr_left_pct }}"
   data-qr-top="{{ qr_top_pct }}"
-  data-qr-size="{{ qr_size_pct }}">
+  data-qr-size="{{ qr_size_pct }}"
+  data-qr-height="{{ qr_height_pct }}"
+  data-qr-radius="{{ qr_radius_pct }}">
 
   <!-- ── Video layer: the client's branded animation, shown for AWAITING_PAYMENT
        and PAID when a video file is configured. The live QR is a real element
@@ -19,7 +21,7 @@
   <div id="video-stage" hidden>
     <div id="video-box">
       <video id="clip" muted playsinline preload="auto"></video>
-      <img id="qr-overlay" alt="QR-код для оплати" hidden>
+      <div id="qr-overlay" hidden><img id="qr-overlay-img" alt="QR-код для оплати"></div>
     </div>
   </div>
 

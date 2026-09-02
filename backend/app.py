@@ -80,6 +80,8 @@ async def kiosk(request: Request) -> HTMLResponse:
             "qr_left_pct": settings.qr_left_pct,
             "qr_top_pct": settings.qr_top_pct,
             "qr_size_pct": settings.qr_size_pct,
+            "qr_height_pct": settings.qr_height_pct,
+            "qr_radius_pct": settings.qr_radius_pct,
         },
     )
 

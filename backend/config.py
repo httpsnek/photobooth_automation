@@ -44,9 +44,13 @@ class Settings:
     attract_video: str = _get("ATTRACT_VIDEO", "")   # looping "waiting for payment" clip
     paid_video: str = _get("PAID_VIDEO", "")         # "payment received" clip, played once
     # Where the live QR sits over the video, as % of the video box (calibrate once).
-    qr_left_pct: float = _float("QR_LEFT_PCT", 50)   # horizontal centre
-    qr_top_pct: float = _float("QR_TOP_PCT", 68)     # vertical centre
-    qr_size_pct: float = _float("QR_SIZE_PCT", 26)   # width as % of video width
+    # The video already has a rounded pink placeholder area. The white QR card is
+    # laid *inside* it, a bit smaller, so the pink frame stays visible.
+    qr_left_pct: float = _float("QR_LEFT_PCT", 49.97)     # card centre X, % of frame W
+    qr_top_pct: float = _float("QR_TOP_PCT", 66.34)       # card centre Y, % of frame H
+    qr_size_pct: float = _float("QR_SIZE_PCT", 24)        # card width,  % of frame W
+    qr_height_pct: float = _float("QR_HEIGHT_PCT", 37.5)  # card height, % of frame H
+    qr_radius_pct: float = _float("QR_RADIUS_PCT", 1.6)   # card corner radius, % of frame W
 
     payment_provider: str = _get("PAYMENT_PROVIDER", "mock").lower()
     monobank_token: str = _get("MONOBANK_TOKEN")

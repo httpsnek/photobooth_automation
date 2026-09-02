@@ -14,7 +14,7 @@ def qr_data_uri(text: str) -> str:
         version=None,
         error_correction=qrcode.constants.ERROR_CORRECT_M,
         box_size=10,
-        border=2,
+        border=1,  # small quiet zone; the overlay sits on its own white card
     )
     qr.add_data(text)
     qr.make(fit=True)

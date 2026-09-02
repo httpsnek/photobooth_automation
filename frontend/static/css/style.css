@@ -2,8 +2,8 @@
 :root {
   --bg: #ffffff;
   --ink: #141414;
-  --pink: #E6187C;
-  --pink-soft: #FBE3EF;
+  --pink: #D6256E;        /* sampled from the client's InstaBOX video */
+  --pink-soft: #F7DCE8;
   --muted: #8a8a8e;
   --warn-bg: #fff3e0;
 
@@ -44,14 +44,22 @@ html, body {
   object-fit: contain;
   background: #fff;
 }
-.qr-overlay {
+#qr-overlay {
   position: absolute;
   translate: -50% -50%;
   background: #fff;
-  border-radius: 6%;
-  /* left / top / width set in JS to match the painted video rect */
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2.5%;
+  /* left / top / width / height / border-radius set in JS from the painted video rect */
 }
-.qr-overlay[hidden] { display: none; }
+#qr-overlay[hidden] { display: none; }
+#qr-overlay img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
 
 /* ── brand header ───────────────────────────────────────── */
 .brand {
