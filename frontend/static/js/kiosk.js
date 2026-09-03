@@ -147,9 +147,22 @@
     kids.forEach(function (el) { el.style.animation = ""; });
   }
 
+  // gentle fade-up on an element when its content changes; removing the class
+  // afterwards is also the safety net (element falls back to its visible base).
+  function playEnter(el) {
+    el.classList.remove("enter");
+    void el.offsetWidth;
+    el.classList.add("enter");
+    setTimeout(function () { el.classList.remove("enter"); }, 500);
+  }
+
+  var lastHtmlState = null;
+
   // ── HTML layer rendering ──
   function showHtmlLayer(cfg, st) {
     hideVideo();
+    var changed = st !== lastHtmlState;
+    lastHtmlState = st;
 
     // awaiting (pricing + QR) vs badge/loader + copy
     var enteringAwaiting = cfg.awaiting && awaiting.hidden;
@@ -169,9 +182,14 @@
       return;
     }
 
+    var loaderWasHidden = loader.hidden, badgeWasHidden = badge.hidden;
     loader.hidden = !cfg.loader;
     badge.hidden = !cfg.icon;
     copy.hidden = !cfg.headline;
+
+    if (changed && cfg.loader && loaderWasHidden) playEnter(loader);
+    if (changed && cfg.icon && badgeWasHidden) playEnter(badge);
+    if (changed && cfg.headline) playEnter(copy);
 
     if (supportEl) {
       if (cfg.support && SUPPORT_PHONE) {

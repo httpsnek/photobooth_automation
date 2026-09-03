@@ -239,16 +239,25 @@ html, body {
   border-radius: 50%;
   display: grid;
   place-items: center;
-  transform: scale(1);
   box-shadow: 0 0 0 calc(var(--hero) * 0.038) var(--ring, transparent);
-  animation: badge-in .5s cubic-bezier(.2, .8, .25, 1.1);
+  /* colour/fill morph when the badge changes kind (soft-pink -> solid, etc.) */
+  transition: background-color .34s ease, box-shadow .34s ease, color .22s ease;
 }
-@keyframes badge-in { from { transform: scale(.9); } to { transform: scale(1); } }
-
 .badge[hidden] { display: none; }
 .badge--ok   { background: var(--pink);      color: #fff;        --ring: var(--pink-soft); }
 .badge--pink { background: var(--pink-tint); color: var(--pink); --ring: #faeaf2; }
 .badge--warn { background: var(--warn-bg);   color: var(--warn); --ring: #fff8ec; }
+
+/* gentle fade-up applied to content that changes between screens */
+.enter { animation: enter .26s cubic-bezier(.2, .7, .3, 1) both; }
+@keyframes enter {
+  from { opacity: 0; transform: translateY(9px); }
+  to   { opacity: 1; transform: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .enter { animation: none; }
+  .badge { transition: none; }
+}
 
 /* morph-icon renders a plain <svg> child (display:contents on the host) */
 #badge svg {
