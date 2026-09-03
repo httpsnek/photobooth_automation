@@ -1,0 +1,9 @@
+.venv
+data
+logs
+__pycache__
+*.pyc
+.pytest_cache
+.git
+.env
+frontend/static/media/instabox.mp4
