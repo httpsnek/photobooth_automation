@@ -59,16 +59,19 @@
       <p id="support" class="support" hidden></p>
     </div>
 
-    <!-- AWAITING_PAYMENT keeps its own richer layout (pricing + QR) -->
+    <!-- AWAITING_PAYMENT — its own layout: text + QR
+         (portrait: text above QR · landscape: QR left, text right) -->
     <section id="awaiting" class="screen" hidden>
-      <div class="pricing">
-        <span class="pricing__shots"><span id="shots-price">{{ shots }}</span> фото</span>
-        <span class="pricing__sep"></span>
-        <span class="pricing__price"><span id="price-value">{{ price }}</span> грн</span>
-      </div>
-      <h1 class="headline">Відскануй QR-код<br>для оплати</h1>
       <div class="qr-frame"><img id="qr" alt="QR-код для оплати" /></div>
-      <p class="foot">Наведи камеру телефона на QR-код<br>та оплати фотосесію</p>
+      <div class="await-text">
+        <div class="pricing">
+          <span class="pricing__shots"><span id="shots-price">{{ shots }}</span> фото</span>
+          <span class="pricing__sep"></span>
+          <span class="pricing__price"><span id="price-value">{{ price }}</span> грн</span>
+        </div>
+        <h1 class="headline">Відскануй QR-код<br>для оплати</h1>
+        <p class="foot">Наведи камеру телефона на QR-код <br>та оплати фотосесію</p>
+      </div>
     </section>
 
   </main>

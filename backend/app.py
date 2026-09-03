@@ -105,11 +105,11 @@ async def qr(text: str = "https://instabox.example/demo") -> Response:
 
 
 @app.get("/gallery", response_class=HTMLResponse)
-async def gallery(request: Request, ar: str = "10 / 16") -> HTMLResponse:
+async def gallery(request: Request, ar: str = "16 / 9") -> HTMLResponse:
     """All screens on one page — a link to send the client."""
     import re
     if not re.fullmatch(r"[\d./ ]{1,12}", ar or ""):
-        ar = "10 / 16"
+        ar = "16 / 9"
     screens = [
         ("connecting", "Завантаження"),
         ("awaiting_payment", "Оплата / QR"),
@@ -136,7 +136,7 @@ async def gallery(request: Request, ar: str = "10 / 16") -> HTMLResponse:
   h1 {{ font-size:20px; margin:0 0 4px; }}
   p.sub {{ margin:0 0 24px; color:#8a8a8e; font-weight:500; }}
   .grid {{ display:grid; gap:24px 20px;
-           grid-template-columns:repeat(auto-fill,minmax(230px,1fr)); }}
+           grid-template-columns:repeat(auto-fill,minmax(340px,1fr)); }}
   figure {{ margin:0; }}
   .frame {{ aspect-ratio:{ar}; border-radius:18px; overflow:hidden;
             background:#fff; box-shadow:0 6px 24px rgba(0,0,0,.10); }}
@@ -144,8 +144,8 @@ async def gallery(request: Request, ar: str = "10 / 16") -> HTMLResponse:
   figcaption {{ margin-top:10px; text-align:center; color:#5a5a62; }}
 </style>
 <h1>{settings.booth_name} — усі екрани</h1>
-<p class="sub">Живий інтерфейс. «Зйомка» анімується — відлік 3·2·1 перед кожним кадром.
- Пропорції: <code>/gallery?ar=9/19.5</code> для телефону.</p>
+<p class="sub">Живий інтерфейс, формат 16:9. «Зйомка» анімується — відлік 3·2·1 перед кожним кадром.
+ Вертикально: <code>/gallery?ar=9/16</code>.</p>
 <div class="grid">{cards}</div>""",
     )
 

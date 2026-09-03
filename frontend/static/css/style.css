@@ -148,7 +148,18 @@ html, body {
 #screen:has(#awaiting:not([hidden])) {
   justify-content: center;
   padding: min(16vh, 112px) 9vw min(9vh, 68px);
-  gap: clamp(18px, 3.4vh, 34px);
+  gap: 0;
+}
+#awaiting {
+  flex-direction: column-reverse;      /* text on top, QR below */
+  align-items: center;
+  gap: clamp(20px, 3.6vh, 38px);
+}
+.await-text {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: clamp(10px, 1.8vh, 18px);
 }
 
 .screen {
@@ -224,10 +235,12 @@ html, body {
 
 /* staggered rise-in for the awaiting screen (replaces the video's pop-in) */
 #awaiting > * { animation: rise .5s cubic-bezier(.2, .7, .3, 1) both; }
-#awaiting > *:nth-child(1) { animation-delay: 0s; }
-#awaiting > *:nth-child(2) { animation-delay: .07s; }
-#awaiting > *:nth-child(3) { animation-delay: .14s; }
-#awaiting > *:nth-child(4) { animation-delay: .21s; }
+#awaiting .await-text { animation-delay: 0s; }
+#awaiting .qr-frame  { animation-delay: .08s; }
+#awaiting .await-text > * { animation: rise .45s cubic-bezier(.2, .7, .3, 1) both; }
+#awaiting .await-text > *:nth-child(1) { animation-delay: .02s; }
+#awaiting .await-text > *:nth-child(2) { animation-delay: .09s; }
+#awaiting .await-text > *:nth-child(3) { animation-delay: .16s; }
 @keyframes rise {
   from { opacity: 0; transform: translateY(14px); }
   to   { opacity: 1; transform: none; }
@@ -347,3 +360,66 @@ html, body {
   color: var(--muted);
 }
 .timer[hidden] { display: none; }
+
+
+/* ════════════════════════════════════════════════════════════
+   LANDSCAPE 16:9  — wide wall tablet. Same design language,
+   re-flowed: logo on top, hero + copy in a centred row.
+   ════════════════════════════════════════════════════════════ */
+@media (orientation: landscape) {
+  :root {
+    --hero: min(46vh, 40vw, 470px);
+    --fs-headline: clamp(2rem, 2.4vw + 1rem, 3.6rem);
+    --fs-body:     clamp(1.05rem, 0.9vw + 0.7rem, 1.6rem);
+    --fs-small:    clamp(0.95rem, 0.6vw + 0.7rem, 1.3rem);
+  }
+
+  .brand { height: min(20vh, 96px); padding-top: min(3vh, 20px); }
+  .logo  { height: min(11vh, 60px); }
+
+  /* status screens: [ badge/loader ]  [ copy ] side by side */
+  #screen {
+    flex-direction: row;
+    align-items: center;
+    justify-content: center;
+    gap: clamp(36px, 6vw, 100px);
+    padding: min(20vh, 104px) 6vw min(7vh, 44px);
+    text-align: left;
+  }
+  #screen > .copy,
+  #screen .copy { align-items: flex-start; text-align: left; }
+  .headline, .muted { text-align: left; }
+  .support { text-align: left; }
+  .shots-progress { margin-top: clamp(8px, 2vh, 18px); }
+
+  /* AWAITING: QR on the left, text on the right */
+  #screen:has(#awaiting:not([hidden])) {
+    padding: min(20vh, 104px) 6vw min(7vh, 44px);
+  }
+  #awaiting {
+    flex-direction: row;
+    align-items: center;
+    justify-content: center;
+    gap: clamp(34px, 5vw, 86px);
+    width: auto;
+    max-width: 94vw;
+  }
+  .await-text {
+    align-items: flex-start;
+    text-align: left;
+    max-width: 48vw;
+  }
+  #awaiting .foot br { display: none; }
+  #awaiting .headline { white-space: nowrap; }   /* break only at the <br> */
+
+  .qr-frame img {
+    width: calc(var(--hero) * 0.92);
+    height: calc(var(--hero) * 0.92);
+  }
+}
+
+/* very short landscape (small 16:9 tablets) — tighten everything */
+@media (orientation: landscape) and (max-height: 560px) {
+  :root { --hero: min(52vh, 34vw, 360px); }
+  .brand { height: min(16vh, 70px); }
+}
