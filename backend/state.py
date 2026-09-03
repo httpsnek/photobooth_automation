@@ -64,6 +64,7 @@ class Session:
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS sessions (
     id            TEXT PRIMARY KEY,
+    booth_id      TEXT,
     state         TEXT NOT NULL,
     invoice_id    TEXT,
     amount_uah    INTEGER NOT NULL DEFAULT 0,
@@ -75,6 +76,8 @@ CREATE TABLE IF NOT EXISTS sessions (
 );
 CREATE INDEX IF NOT EXISTS idx_sessions_invoice ON sessions(invoice_id);
 CREATE INDEX IF NOT EXISTS idx_sessions_created ON sessions(created_at);
+
+CREATE TABLE IF NOT EXISTS kv (k TEXT PRIMARY KEY, v TEXT NOT NULL);
 """
 
 
@@ -85,15 +88,20 @@ class SessionStore:
     async def init(self) -> None:
         async with aiosqlite.connect(self._path) as db:
             await db.executescript(_SCHEMA)
+            # forward-compat: add booth_id column to pre-existing DBs
+            cur = await db.execute("PRAGMA table_info(sessions)")
+            cols = {row[1] for row in await cur.fetchall()}
+            if "booth_id" not in cols:
+                await db.execute("ALTER TABLE sessions ADD COLUMN booth_id TEXT")
             await db.commit()
 
     async def save(self, s: Session, *, prints: int = 0) -> None:
         async with aiosqlite.connect(self._path) as db:
             await db.execute(
                 """
-                INSERT INTO sessions (id, state, invoice_id, amount_uah, created_at,
-                                      paid_at, finished_at, error, prints)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO sessions (id, booth_id, state, invoice_id, amount_uah,
+                                      created_at, paid_at, finished_at, error, prints)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(id) DO UPDATE SET
                     state=excluded.state,
                     invoice_id=excluded.invoice_id,
@@ -104,11 +112,32 @@ class SessionStore:
                     prints=MAX(sessions.prints, excluded.prints)
                 """,
                 (
-                    s.id, s.state.value, s.invoice_id, s.amount_uah, s.created_at,
-                    s.paid_at, s.finished_at, s.error, prints,
+                    s.id, settings.booth_id, s.state.value, s.invoice_id, s.amount_uah,
+                    s.created_at, s.paid_at, s.finished_at, s.error, prints,
                 ),
             )
             await db.commit()
+
+    # ── key/value meta (paper counter, pause flag, …) ──
+    async def get_meta(self, key: str, default: str = "") -> str:
+        async with aiosqlite.connect(self._path) as db:
+            cur = await db.execute("SELECT v FROM kv WHERE k = ?", (key,))
+            row = await cur.fetchone()
+            return row[0] if row else default
+
+    async def set_meta(self, key: str, value: str) -> None:
+        async with aiosqlite.connect(self._path) as db:
+            await db.execute(
+                "INSERT INTO kv (k, v) VALUES (?, ?) "
+                "ON CONFLICT(k) DO UPDATE SET v = excluded.v",
+                (key, str(value)),
+            )
+            await db.commit()
+
+    async def total_prints(self) -> int:
+        async with aiosqlite.connect(self._path) as db:
+            cur = await db.execute("SELECT COALESCE(SUM(prints), 0) FROM sessions")
+            return int((await cur.fetchone())[0])
 
     async def load_last(self) -> dict | None:
         async with aiosqlite.connect(self._path) as db:

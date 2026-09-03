@@ -8,12 +8,16 @@ Normalized status vocabulary used by the rest of the app:
 """
 from __future__ import annotations
 
+import base64
+import logging
 import time
 from dataclasses import dataclass, field
 
 import httpx
 
 from .config import settings
+
+log = logging.getLogger("payment")
 
 CREATED = "created"
 PROCESSING = "processing"
@@ -47,6 +51,10 @@ class PaymentProvider:
     async def refund(self, invoice_id: str, amount_uah: int) -> bool:
         raise NotImplementedError
 
+    async def verify_webhook(self, body: bytes, x_sign: str) -> bool:
+        """True if the webhook body is authentic. Default: cannot verify."""
+        return False
+
     async def aclose(self) -> None:
         pass
 
@@ -63,7 +71,6 @@ class MockProvider(PaymentProvider):
             raise PaymentError("MOCK_FAIL=1: simulated acquirer outage")
         inv_id = f"mock-{int(time.time() * 1000)}"
         self._invoices[inv_id] = {"status": CREATED, "amount": amount_uah, "ref": reference}
-        # pay_url points at our own mock payment page (see app.py)
         return Invoice(id=inv_id, pay_url=f"/mock/pay/{inv_id}", amount_uah=amount_uah)
 
     async def get_status(self, invoice_id: str) -> str:
@@ -75,7 +82,9 @@ class MockProvider(PaymentProvider):
             return True
         return False
 
-    # called by the mock payment page
+    async def verify_webhook(self, body: bytes, x_sign: str) -> bool:
+        return True  # nothing to spoof in dev
+
     def mark_paid(self, invoice_id: str) -> bool:
         if invoice_id in self._invoices:
             self._invoices[invoice_id]["status"] = SUCCESS
@@ -99,21 +108,25 @@ class MonobankProvider(PaymentProvider):
     name = "monobank"
 
     def __init__(self) -> None:
-        if not settings.monobank_token:
-            raise PaymentError("MONOBANK_TOKEN is not set")
+        if not settings.bank_token:
+            raise PaymentError("BANK_TOKEN is not set")
         self._client = httpx.AsyncClient(
             base_url=settings.monobank_api_base,
-            headers={"X-Token": settings.monobank_token},
+            headers={"X-Token": settings.bank_token},
             timeout=httpx.Timeout(10.0),
         )
+        self._pubkey_pem: bytes | None = None
 
     async def create_invoice(self, amount_uah: int, reference: str) -> Invoice:
+        # reference is written to the bank statement + echoed in the webhook,
+        # so tag it with the booth id — one statement, many booths.
         payload = {
             "amount": amount_uah * 100,  # kopiykas
             "ccy": 980,
             "merchantPaymInfo": {
-                "reference": reference,
-                "destination": "Фотокабінка — сесія зйомки",
+                "reference": f"{settings.booth_id}/{reference}",
+                "destination": f"{settings.booth_name}: фотосесія ({settings.shots} фото)",
+                "comment": f"{settings.booth_name} · {settings.booth_id}",
             },
             "validity": settings.invoice_ttl_sec,
             "paymentType": "debit",
@@ -141,6 +154,28 @@ class MonobankProvider(PaymentProvider):
         if r.status_code != 200:
             raise PaymentError(f"refund {r.status_code}: {r.text}")
         return _MONO_STATUS.get(r.json().get("status", ""), "") in {REVERSED, PROCESSING}
+
+    async def _pubkey(self) -> bytes:
+        if self._pubkey_pem is None:
+            r = await self._client.get("/api/merchant/pubkey")
+            r.raise_for_status()
+            self._pubkey_pem = base64.b64decode(r.json()["key"])
+        return self._pubkey_pem
+
+    async def verify_webhook(self, body: bytes, x_sign: str) -> bool:
+        try:
+            from cryptography.hazmat.primitives import hashes, serialization
+            from cryptography.hazmat.primitives.asymmetric import ec
+
+            pub = serialization.load_pem_public_key(await self._pubkey())
+            pub.verify(
+                base64.b64decode(x_sign), body,
+                ec.ECDSA(hashes.SHA256()),
+            )
+            return True
+        except Exception as exc:
+            log.warning("webhook signature check failed: %s", exc)
+            return False
 
     async def aclose(self) -> None:
         await self._client.aclose()

@@ -11,6 +11,7 @@
   var QR_RADIUS = parseFloat(body.dataset.qrRadius) || 1.6;
   var PRICE = parseFloat(body.dataset.price) || 0;
   var SHOTS = parseInt(body.dataset.shots, 10) || 4;
+  var SUPPORT_PHONE = (body.dataset.supportPhone || "").trim();
 
   // ── Lucide icon data (IconNode). Morphed by <morph-icon>. ──
   var ICON = {
@@ -30,8 +31,8 @@
     PRINTING:         { icon: "printer", badge: "pink", headline: "Друкуємо ваше фото…" },
     DONE:             { icon: "check", badge: "ok", headline: "Готово!", sub: "Забирайте фото знизу" },
     REFUNDING:        { loader: true, headline: "Повертаємо кошти…" },
-    REFUNDED:         { icon: "undo", badge: "warn", headline: "Сталася помилка", sub: "Кошти повернено на картку" },
-    OUT_OF_SERVICE:   { icon: "wrench", badge: "warn", headline: "Тимчасово не працює" }
+    REFUNDED:         { icon: "undo", badge: "warn", headline: "Сталася помилка", sub: "Кошти повернено на картку", support: true },
+    OUT_OF_SERVICE:   { icon: "wrench", badge: "warn", headline: "Тимчасово не працює", support: true }
   };
   var COUNTDOWN_STATES = { SHOOTING: 1, PRINTING: 1 };
 
@@ -44,6 +45,7 @@
   var copy = document.getElementById("copy");
   var headlineEl = document.getElementById("headline");
   var subtextEl = document.getElementById("subtext");
+  var supportEl = document.getElementById("support");
   var shotsProgress = document.getElementById("shots-progress");
   var awaiting = document.getElementById("awaiting");
   var timerEl = document.getElementById("timer");
@@ -170,6 +172,15 @@
     loader.hidden = !cfg.loader;
     badge.hidden = !cfg.icon;
     copy.hidden = !cfg.headline;
+
+    if (supportEl) {
+      if (cfg.support && SUPPORT_PHONE) {
+        supportEl.textContent = "Підтримка: " + SUPPORT_PHONE;
+        supportEl.hidden = false;
+      } else {
+        supportEl.hidden = true;
+      }
+    }
 
     if (cfg.headline) {
       headlineEl.textContent = cfg.headline;

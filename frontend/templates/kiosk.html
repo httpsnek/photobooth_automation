@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
-  <title>InstaBOX</title>
+  <title>{{ booth_name }}</title>
   <link rel="stylesheet" href="/static/css/style.css">
 </head>
 <body
@@ -15,7 +15,8 @@
   data-qr-height="{{ qr_height_pct }}"
   data-qr-radius="{{ qr_radius_pct }}"
   data-price="{{ price }}"
-  data-shots="{{ shots }}">
+  data-shots="{{ shots }}"
+  data-support-phone="{{ support_phone }}">
 
   <!-- ── Video layer: the client's branded animation, shown for AWAITING_PAYMENT
        and PAID when a video file is configured. The live QR is a real element
@@ -50,6 +51,7 @@
       <h1 id="headline" class="headline"></h1>
       <p id="subtext" class="muted" hidden></p>
       <div id="shots-progress" class="shots-progress" hidden></div>
+      <p id="support" class="support" hidden></p>
     </div>
 
     <!-- AWAITING_PAYMENT keeps its own richer layout (pricing + QR) -->

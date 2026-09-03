@@ -183,6 +183,13 @@ html, body {
   line-height: 1.45;
   color: var(--ink);
 }
+.support {
+  margin-top: clamp(6px, 1.4vh, 14px);
+  font-weight: 600;
+  font-size: var(--fs-small);
+  color: var(--muted);
+}
+.support[hidden] { display: none; }
 
 /* ── pricing row (html fallback only) ───────────────────── */
 .pricing {

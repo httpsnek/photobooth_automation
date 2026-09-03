@@ -67,7 +67,7 @@ class RestTrigger(BoothTrigger):
 
     async def start(self) -> bool:
         try:
-            r = await self._client.get(settings.dslrbooth_rest_url, params=self._params())
+            r = await self._client.get(settings.dslrbooth_api_url, params=self._params())
             ok = r.status_code == 200
             if not ok:
                 log.error("dslrBooth REST %s: %s", r.status_code, r.text[:200])
@@ -78,7 +78,7 @@ class RestTrigger(BoothTrigger):
 
     async def healthy(self) -> bool:
         try:
-            r = await self._client.get(settings.dslrbooth_rest_url, params={"mode": "status"})
+            r = await self._client.get(settings.dslrbooth_api_url, params={"mode": "status"})
             return r.status_code < 500
         except Exception:
             return False

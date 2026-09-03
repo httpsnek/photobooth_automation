@@ -9,8 +9,10 @@ import asyncio
 import logging
 import time
 
+import httpx
+
 from . import notify, payment
-from .config import settings
+from .config import VERSION, settings
 from .dslrbooth import BoothTrigger
 from .payment import PaymentProvider
 from .qr import qr_data_uri
@@ -32,45 +34,106 @@ class Controller:
         self.store = store
         self.broadcaster = broadcaster
         self.session = Session()
+        self.started_at = time.time()
         self._stop = asyncio.Event()
         self._payment_hint = asyncio.Event()
-        self._down = False  # currently in an acquirer/booth outage
+        self._down = False          # acquirer / booth outage
+        self._paused = False        # manual pause via /admin
+        self._paused_by = ""
         self._summary_marker = time.strftime("%Y-%m-%d")
+        self._paper_base = 0        # print count when the current roll went in
 
     # ───────────────────────── public API ─────────────────────────
     def notify_payment_hint(self) -> None:
-        """Called by the webhook route to wake the poller immediately."""
         self._payment_hint.set()
 
     def stop(self) -> None:
         self._stop.set()
 
+    async def pause(self, by: str = "адмін") -> None:
+        if self._paused:
+            return
+        self._paused = True
+        self._paused_by = by
+        await notify.paused(by)
+
+    async def resume(self, by: str = "адмін") -> None:
+        if not self._paused:
+            return
+        self._paused = False
+        await notify.resumed(by)
+
+    async def reset_paper(self) -> None:
+        total = await self.store.total_prints()
+        self._paper_base = total
+        await self.store.set_meta("paper_base", str(total))
+        await self.store.set_meta("paper_warned", "0")
+        await notify.send("🧻 Лічильник паперу скинуто — новий рулон")
+
+    async def status(self) -> dict:
+        since = _today_start()
+        s_count, s_rev, s_prints = await self.store.stats_since(since)
+        return {
+            "booth_id": settings.booth_id,
+            "booth_name": settings.booth_name,
+            "version": VERSION,
+            "state": self.session.state.value,
+            "provider": self.provider.name,
+            "trigger": self.trigger.name,
+            "session_id": self.session.id,
+            "down": self._down,
+            "paused": self._paused,
+            "uptime_sec": round(time.time() - self.started_at),
+            "today": {"sessions": s_count, "revenue": s_rev, "prints": s_prints},
+            "paper_left": await self._paper_left(),
+            "last_error": self.session.error or None,
+        }
+
     def health(self) -> dict:
+        # kept for backwards-compat with the old /health shape
         return {
             "state": self.session.state.value,
             "provider": self.provider.name,
             "trigger": self.trigger.name,
             "session_id": self.session.id,
             "down": self._down,
+            "paused": self._paused,
+            "booth_id": settings.booth_id,
+            "version": VERSION,
         }
 
     async def run(self) -> None:
+        self._paper_base = int(await self.store.get_meta("paper_base", "0") or 0)
+        await notify.startup(VERSION, self.provider.name, self.trigger.name)
         await self._reconcile_on_start()
         self.session.new_cycle()
         self._publish()
-        while not self._stop.is_set():
-            try:
-                await self._tick()
-            except asyncio.CancelledError:
-                raise
-            except Exception:
-                log.exception("controller tick failed")
-                await self._sleep(2)
+        hb = asyncio.create_task(self._heartbeat_loop(), name="heartbeat")
+        try:
+            while not self._stop.is_set():
+                try:
+                    await self._tick()
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    log.exception("controller tick failed")
+                    await self._sleep(2)
+        finally:
+            hb.cancel()
         log.info("controller stopped")
 
     # ───────────────────────── loop body ─────────────────────────
     async def _tick(self) -> None:
         st = self.session.state
+
+        if self._paused:
+            if st != State.OUT_OF_SERVICE:
+                self.session.state = State.OUT_OF_SERVICE
+                self.session.error = f"Пауза ({self._paused_by})"
+                self._publish()
+            await self._sleep(3)
+            return
+
         if st == State.IDLE:
             ok = await self._create_invoice()
             if ok and self._down:
@@ -93,7 +156,7 @@ class Controller:
             self._publish()
         elif st == State.OUT_OF_SERVICE:
             await self._sleep(10)
-            self.session.new_cycle()  # -> IDLE, retry creating an invoice
+            self.session.new_cycle()  # -> IDLE, retry
         await self._maybe_daily_summary()
 
     # ───────────────────────── steps ─────────────────────────
@@ -119,7 +182,7 @@ class Controller:
 
     async def _await_payment(self) -> None:
         deadline = self.session.phase_deadline or (time.time() + settings.invoice_ttl_sec)
-        while time.time() < deadline and not self._stop.is_set():
+        while time.time() < deadline and not self._stop.is_set() and not self._paused:
             self._payment_hint.clear()
             try:
                 status = await self.provider.get_status(self.session.invoice_id)
@@ -138,14 +201,13 @@ class Controller:
                 log.info("invoice %s ended as %s", self.session.invoice_id, status)
                 break
 
-            try:  # sleep poll_interval, but wake early if the webhook pinged us
+            try:
                 await asyncio.wait_for(
                     self._payment_hint.wait(), timeout=settings.poll_interval_sec
                 )
             except asyncio.TimeoutError:
                 pass
 
-        # expired / failed / TTL -> fresh invoice
         self.session.new_cycle()
         self._publish()
 
@@ -165,6 +227,7 @@ class Controller:
         self.session.finished_at = time.time()
         await self._enter(State.DONE, settings.done_duration_sec)
         await self.store.save(self.session, prints=1)
+        await self._after_print()
 
     async def _trigger_with_retries(self) -> bool:
         for attempt in range(1, settings.trigger_retries + 1):
@@ -174,9 +237,7 @@ class Controller:
                     return True
             except Exception as exc:
                 log.error("trigger raised: %s", exc)
-            log.warning(
-                "booth trigger %d/%d failed", attempt, settings.trigger_retries
-            )
+            log.warning("booth trigger %d/%d failed", attempt, settings.trigger_retries)
             if attempt < settings.trigger_retries:
                 await self._sleep(settings.trigger_retry_pause_sec)
         return False
@@ -208,7 +269,7 @@ class Controller:
                  State.REFUNDING.value}
         if last["state"] not in stuck:
             return
-        log.warning("found interrupted session %s in %s — refunding", last["id"], last["state"])
+        log.warning("interrupted session %s in %s — refunding", last["id"], last["state"])
         sid, inv, amount = last["id"], last["invoice_id"], last["amount_uah"]
         ok = False
         try:
@@ -217,7 +278,7 @@ class Controller:
             log.error("reconcile refund failed: %s", exc)
         await notify.send(
             f"♻️ Після перезапуску знайдено незавершену сесію <code>{sid}</code> "
-            f"({last['state']}). Повернення {amount} грн: "
+            f"({last['state']}). Повернення {amount} {settings.currency}: "
             f"{'успішно' if ok else 'НЕ ВДАЛОСЯ — перевір вручну'}"
         )
         closed = Session(
@@ -227,15 +288,50 @@ class Controller:
         )
         await self.store.save(closed)
 
+    # ───────────────────────── paper ─────────────────────────
+    async def _paper_left(self) -> int | None:
+        if settings.paper_capacity <= 0:
+            return None
+        used = await self.store.total_prints() - self._paper_base
+        return max(0, settings.paper_capacity - used)
+
+    async def _after_print(self) -> None:
+        left = await self._paper_left()
+        if left is None:
+            return
+        warned = await self.store.get_meta("paper_warned", "0") == "1"
+        if left <= settings.paper_warn_prints_left and not warned:
+            await self.store.set_meta("paper_warned", "1")
+            await notify.paper_low(left)
+
+    # ───────────────────────── daily summary ─────────────────────────
     async def _maybe_daily_summary(self) -> None:
         now = time.localtime()
         today = time.strftime("%Y-%m-%d", now)
         if today == self._summary_marker or now.tm_hour < settings.daily_summary_hour:
             return
         self._summary_marker = today
-        since = time.time() - 24 * 3600
-        count, revenue, prints = await self.store.stats_since(since)
-        await notify.daily_summary(count, revenue, prints)
+        count, revenue, prints = await self.store.stats_since(time.time() - 24 * 3600)
+        await notify.daily_summary(count, revenue, prints, await self._paper_left())
+
+    # ───────────────────────── heartbeat ─────────────────────────
+    async def _heartbeat_loop(self) -> None:
+        if not settings.heartbeat_url:
+            return
+        while not self._stop.is_set():
+            try:
+                payload = await self.status()
+                payload["ts"] = time.time()
+                async with httpx.AsyncClient(timeout=8.0) as client:
+                    await client.post(settings.heartbeat_url, json=payload)
+            except Exception as exc:
+                log.debug("heartbeat failed: %s", exc)
+            try:
+                await asyncio.wait_for(
+                    self._stop.wait(), timeout=settings.heartbeat_interval_sec
+                )
+            except asyncio.TimeoutError:
+                pass
 
     # ───────────────────────── helpers ─────────────────────────
     async def _enter(self, state: State, duration: float | None) -> None:
@@ -258,3 +354,8 @@ class Controller:
                 target = settings.public_base_url.rstrip("/") + target
             snap["qr_data_uri"] = qr_data_uri(target)
         self.broadcaster.publish(snap)
+
+
+def _today_start() -> float:
+    t = time.localtime()
+    return time.mktime((t.tm_year, t.tm_mon, t.tm_mday, 0, 0, 0, 0, 0, -1))
