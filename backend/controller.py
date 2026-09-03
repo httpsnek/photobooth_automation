@@ -262,31 +262,47 @@ class Controller:
         self._publish()
 
     async def _reconcile_on_start(self) -> None:
+        """A crash left a paid session unfinished. Money-first policy:
+        PAID/SHOOTING/REFUNDING -> the guest likely got nothing -> refund.
+        PRINTING -> shots were taken, the strip probably printed -> just alert.
+        """
         last = await self.store.load_last()
         if not last:
             return
-        stuck = {State.PAID.value, State.SHOOTING.value, State.PRINTING.value,
-                 State.REFUNDING.value}
-        if last["state"] not in stuck:
+        st = last["state"]
+        refund_states = {State.PAID.value, State.SHOOTING.value, State.REFUNDING.value}
+        if st not in refund_states and st != State.PRINTING.value:
             return
-        log.warning("interrupted session %s in %s — refunding", last["id"], last["state"])
         sid, inv, amount = last["id"], last["invoice_id"], last["amount_uah"]
-        ok = False
-        try:
-            ok = await self.provider.refund(inv, amount)
-        except Exception as exc:
-            log.error("reconcile refund failed: %s", exc)
-        await notify.send(
-            f"♻️ Після перезапуску знайдено незавершену сесію <code>{sid}</code> "
-            f"({last['state']}). Повернення {amount} {settings.currency}: "
-            f"{'успішно' if ok else 'НЕ ВДАЛОСЯ — перевір вручну'}"
-        )
+
+        if st == State.PRINTING.value:
+            log.warning("interrupted session %s in PRINTING — alert only", sid)
+            await notify.send(
+                f"♻️ Після перезапуску: сесія <code>{sid}</code> обірвалась під час друку "
+                f"({amount} {settings.currency}). Кадри зроблено — перевір, чи вийшло фото."
+            )
+            closed_state = State.DONE
+            err = "reconciled: crashed during printing"
+        else:
+            log.warning("interrupted session %s in %s — refunding", sid, st)
+            ok = False
+            try:
+                ok = await self.provider.refund(inv, amount)
+            except Exception as exc:
+                log.error("reconcile refund failed: %s", exc)
+            await notify.send(
+                f"♻️ Після перезапуску знайдено незавершену сесію <code>{sid}</code> "
+                f"({st}). Повернення {amount} {settings.currency}: "
+                f"{'успішно' if ok else 'НЕ ВДАЛОСЯ — перевір вручну'}"
+            )
+            closed_state = State.REFUNDED
+            err = "reconciled after restart"
+
         closed = Session(
-            id=sid, invoice_id=inv, amount_uah=amount, state=State.REFUNDED,
-            created_at=last["created_at"], finished_at=time.time(),
-            error="reconciled after restart",
+            id=sid, invoice_id=inv, amount_uah=amount, state=closed_state,
+            created_at=last["created_at"], finished_at=time.time(), error=err,
         )
-        await self.store.save(closed)
+        await self.store.save(closed, prints=last.get("prints", 0))
 
     # ───────────────────────── paper ─────────────────────────
     async def _paper_left(self) -> int | None:

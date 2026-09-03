@@ -93,7 +93,7 @@ $action  = New-ScheduledTaskAction -Execute $runBat -WorkingDirectory $PSScriptR
 $trigger = New-ScheduledTaskTrigger -AtLogOn
 $set     = New-ScheduledTaskSettingsSet -RestartCount 999 -RestartInterval (New-TimeSpan -Minutes 1) `
              -MultipleInstances IgnoreNew -ExecutionTimeLimit ([TimeSpan]::Zero) `
-             -DisallowHardTerminate:$false -StartWhenAvailable
+             -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
 Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Settings $set `
   -RunLevel Highest -Force | Out-Null
 Write-Host "Scheduled task '$taskName' registered (starts at logon, auto-restarts)."
