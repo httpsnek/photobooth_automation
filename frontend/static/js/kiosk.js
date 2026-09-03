@@ -307,30 +307,14 @@
     var auto = one === "auto";
     var HOLD = { AWAITING_PAYMENT: 4600, PAID: 5200 };  // give the video time
     var ti = 0;
-
-    // small back chip + counter (tap anywhere = next)
-    var pill = document.createElement("div");
-    pill.style.cssText = "position:fixed;left:50%;bottom:2.6vh;translate:-50% 0;z-index:99;" +
-      "display:flex;align-items:center;gap:8px;font:600 13px/1 system-ui,sans-serif;" +
-      "color:#a9a9b1;background:#fff;padding:8px 10px 8px 8px;border-radius:999px;" +
-      "box-shadow:0 3px 16px rgba(0,0,0,.1)";
-    var backChip = document.createElement("button");
-    backChip.textContent = "‹";
-    backChip.style.cssText = "border:0;border-radius:999px;width:26px;height:26px;font:700 15px/1 system-ui;" +
-      "background:#16151a;color:#fff;cursor:pointer;flex:none";
-    var label = document.createElement("span");
-    label.style.whiteSpace = "nowrap";
-    pill.append(backChip, label);
-    if (auto) pill.style.display = "none";
-    document.body.appendChild(pill);
     var timerEl2 = document.getElementById("timer");
 
     var autoTimer = null;
+    var label = null;
     function show() {
       var n = ((ti % TOUR.length) + TOUR.length) % TOUR.length;
       var st = TOUR[n];
-      label.textContent = (n + 1) + " / " + TOUR.length + "   " + st +
-        (auto ? "" : "   ·   тап →");
+      if (label) label.textContent = (n + 1) + " / " + TOUR.length + "  ·  " + st;
       render({ state: st, price: PRICE, shots: SHOTS, seconds_left: 12 });
       timerEl2.hidden = true;
       if (auto) {
@@ -338,27 +322,43 @@
         autoTimer = setTimeout(function () { ti++; show(); }, HOLD[st] || 2800);
       }
     }
-    show();
 
-    if (!auto) {
-      var lastNav = Date.now();                     // ignore stray events right after load
-      function nav(dir) {
-        var now = Date.now();
-        if (now - lastNav < 450) return;             // one tap = one step
-        lastNav = now;
-        ti += dir;
-        show();
-      }
-      backChip.addEventListener("pointerdown", function (e) {
-        e.stopPropagation(); e.preventDefault(); nav(-1);
-      });
-      // tap anywhere else advances
-      window.addEventListener("pointerdown", function () { nav(1); });
-      window.addEventListener("keydown", function (e) {
-        if (e.key === "ArrowRight" || e.key === " " || e.key === "Enter") nav(1);
-        else if (e.key === "ArrowLeft") nav(-1);
-      });
+    if (auto) { show(); return; }
+
+    // ── tap-to-advance: two explicit hit zones + a counter pill ──
+    var lastNav = 0;
+    function nav(dir) {
+      var now = Date.now();
+      if (now - lastNav < 350) return;   // collapse accidental double taps
+      lastNav = now;
+      ti += dir;
+      show();
     }
+
+    function zone(css, dir) {
+      var z = document.createElement("div");
+      z.style.cssText = "position:fixed;top:0;bottom:0;z-index:98;cursor:pointer;" + css;
+      z.addEventListener("click", function () { nav(dir); });
+      document.body.appendChild(z);
+      return z;
+    }
+    zone("left:0;width:28%", -1);        // tap left  = back
+    zone("left:28%;right:0", 1);         // tap right = next
+
+    var pill = document.createElement("div");
+    pill.style.cssText = "position:fixed;left:50%;bottom:2.6vh;translate:-50% 0;z-index:99;" +
+      "font:600 13px/1 system-ui,sans-serif;color:#a9a9b1;background:#fff;padding:9px 16px;" +
+      "border-radius:999px;box-shadow:0 3px 16px rgba(0,0,0,.1);white-space:nowrap;pointer-events:none";
+    label = document.createElement("span");
+    pill.appendChild(label);
+    document.body.appendChild(pill);
+
+    window.addEventListener("keydown", function (e) {
+      if (e.key === "ArrowRight" || e.key === " " || e.key === "Enter") nav(1);
+      else if (e.key === "ArrowLeft") nav(-1);
+    });
+
+    show();
     return;
   }
 
