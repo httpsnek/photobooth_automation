@@ -244,7 +244,8 @@ html, body {
   transition: background-color .34s ease, box-shadow .34s ease, color .22s ease;
 }
 .badge[hidden] { display: none; }
-.badge--ok   { background: var(--pink);      color: #fff;        --ring: var(--pink-soft); }
+.badge--ok,
+.badge.counting { background: var(--pink); color: #fff; --ring: var(--pink-soft); }
 .badge--pink { background: var(--pink-tint); color: var(--pink); --ring: #faeaf2; }
 .badge--warn { background: var(--warn-bg);   color: var(--warn); --ring: #fff8ec; }
 
@@ -259,7 +260,8 @@ html, body {
   .badge { transition: none; }
 }
 
-/* morph-icon renders a plain <svg> child (display:contents on the host) */
+/* morph-icon renders a plain <svg> child; host stays transparent to layout.
+   (the host's inline display is toggled from JS during SHOOTING) */
 #badge svg {
   width: 46%;
   height: 46%;
@@ -268,6 +270,40 @@ html, body {
 }
 /* the checkmark reads better a touch larger */
 #badge.badge--ok svg { width: 58%; height: 58%; }
+
+/* per-shot countdown number, shown in the badge during SHOOTING */
+#countdown-num {
+  font-weight: 800;
+  font-size: calc(var(--hero) * 0.42);
+  line-height: 1;
+  color: inherit;
+  font-variant-numeric: tabular-nums;
+}
+#countdown-num[hidden],
+#badge:not(.counting) #countdown-num { display: none; }
+#countdown-num.pulse { animation: cd-pulse .42s cubic-bezier(.2, .8, .3, 1); }
+@keyframes cd-pulse {
+  0%   { transform: scale(.5); opacity: .25; }
+  60%  { transform: scale(1.06); opacity: 1; }
+  100% { transform: scale(1); opacity: 1; }
+}
+
+/* camera flash — one quick white pulse per shot */
+#flash {
+  position: fixed;
+  inset: 0;
+  background: #fff;
+  opacity: 0;
+  pointer-events: none;
+  z-index: 50;
+}
+#flash.go { animation: flash .4s ease; }
+@keyframes flash { 0% { opacity: 0; } 12% { opacity: .92; } 100% { opacity: 0; } }
+
+@media (prefers-reduced-motion: reduce) {
+  #countdown-num.pulse { animation: none; }
+  #flash.go { animation: none; }
+}
 
 /* ── shot progress dots ─────────────────────────────────── */
 .shots-progress {

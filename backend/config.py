@@ -103,6 +103,7 @@ class Settings:
     session_duration_sec: float = _float("SESSION_DURATION_SEC", 35)
     print_duration_sec: float = _float("PRINT_DURATION_SEC", 25)
     done_duration_sec: float = _float("DONE_DURATION_SEC", 6)
+    shot_countdown_sec: int = _int("SHOT_COUNTDOWN_SEC", 3)  # the "3·2·1" before each shot
     trigger_retries: int = _int("TRIGGER_RETRIES", 3)
     trigger_retry_pause_sec: float = _float("TRIGGER_RETRY_PAUSE_SEC", 2.0)
 

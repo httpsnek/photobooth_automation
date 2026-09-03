@@ -84,6 +84,8 @@ async def kiosk(request: Request) -> HTMLResponse:
             "price": settings.price_uah,
             "currency": settings.currency,
             "shots": settings.shots,
+            "session_duration": settings.session_duration_sec,
+            "shot_countdown": settings.shot_countdown_sec,
             "attract_video": settings.attract_video,
             "paid_video": settings.paid_video,
             "qr_left_pct": settings.qr_left_pct,

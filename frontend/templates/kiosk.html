@@ -16,6 +16,8 @@
   data-qr-radius="{{ qr_radius_pct }}"
   data-price="{{ price }}"
   data-shots="{{ shots }}"
+  data-session-duration="{{ session_duration }}"
+  data-shot-countdown="{{ shot_countdown }}"
   data-support-phone="{{ support_phone }}">
 
   <!-- ── Video layer: the client's branded animation, shown for AWAITING_PAYMENT
@@ -38,12 +40,15 @@
     </div>
   </header>
 
+  <div id="flash" aria-hidden="true"></div>
+
   <main id="screen">
 
-    <!-- one badge, morphs between states -->
+    <!-- one badge: morphs its icon, or shows the per-shot countdown number -->
     <div id="badge" class="badge" hidden>
       <morph-icon id="badge-icon" stroke-width="1.5" absolute-stroke-width
                   spring="smooth" reduced-motion="never"></morph-icon>
+      <span id="countdown-num" hidden></span>
     </div>
     <div id="loader" class="loader" hidden></div>
 

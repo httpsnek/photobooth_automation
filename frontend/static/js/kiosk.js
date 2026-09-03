@@ -11,6 +11,8 @@
   var QR_RADIUS = parseFloat(body.dataset.qrRadius) || 1.6;
   var PRICE = parseFloat(body.dataset.price) || 0;
   var SHOTS = parseInt(body.dataset.shots, 10) || 4;
+  var SESSION_DURATION = parseFloat(body.dataset.sessionDuration) || 30;
+  var SHOT_COUNTDOWN = parseInt(body.dataset.shotCountdown, 10) || 3;
   var SUPPORT_PHONE = (body.dataset.supportPhone || "").trim();
 
   // ── Lucide icon data (IconNode). Morphed by <morph-icon>. ──
@@ -27,14 +29,14 @@
     CONNECTING:       { loader: true, headline: "Завантаження…" },
     AWAITING_PAYMENT: { awaiting: true },
     PAID:             { icon: "check", badge: "ok", headline: "Оплату отримано" },
-    SHOOTING:         { icon: "camera", badge: "pink", headline: "Дивіться в камеру!", sub: "Робимо " + SHOTS + " кадри поспіль" },
+    SHOOTING:         { icon: "camera", badge: "pink", headline: "Дивіться в камеру!" },
     PRINTING:         { icon: "printer", badge: "pink", headline: "Друкуємо ваше фото…" },
     DONE:             { icon: "check", badge: "ok", headline: "Готово!", sub: "Забирайте фото знизу" },
     REFUNDING:        { loader: true, headline: "Повертаємо кошти…" },
     REFUNDED:         { icon: "undo", badge: "warn", headline: "Сталася помилка", sub: "Кошти повернено на картку", support: true },
     OUT_OF_SERVICE:   { icon: "wrench", badge: "warn", headline: "Тимчасово не працює", support: true }
   };
-  var COUNTDOWN_STATES = { SHOOTING: 1, PRINTING: 1 };
+  var COUNTDOWN_STATES = { PRINTING: 1 };  // SHOOTING shows its own per-shot count
 
   // ── Elements ──
   var brand = document.querySelector(".brand");
@@ -47,6 +49,8 @@
   var subtextEl = document.getElementById("subtext");
   var supportEl = document.getElementById("support");
   var shotsProgress = document.getElementById("shots-progress");
+  var countdownNum = document.getElementById("countdown-num");
+  var flashEl = document.getElementById("flash");
   var awaiting = document.getElementById("awaiting");
   var timerEl = document.getElementById("timer");
   var qrEl = document.getElementById("qr");
@@ -248,37 +252,84 @@
     qrOverlay.hidden = true;
     showHtmlLayer(cfg, st);
 
-    if (st === "SHOOTING" && state !== "SHOOTING") shotDots(SHOTS, snap.seconds_left || 30);
-    else if (st !== "SHOOTING") clearShotDots();
+    if (st === "SHOOTING" && state !== "SHOOTING") runShoot();
+    else if (st !== "SHOOTING") stopShoot();
 
     if (COUNTDOWN_STATES[st]) startCountdown(snap.seconds_left);
     else stopCountdown();
     state = st;
   }
 
-  // ── shot progress: N dots fill one-by-one across the shooting window ──
-  //   Approximate (no per-shot signal without dslrBooth Pro) — the real
-  //   3·2·1 per frame shows on the camera screen.
-  var shotTimers = [];
-  function clearShotDots() {
-    shotTimers.forEach(clearTimeout);
-    shotTimers = [];
+  // ── per-shot "3·2·1" countdown across the shooting window ──
+  //   Approximate — no per-frame signal without dslrBooth Pro. Even a small
+  //   offset still does the job: people see "get ready, 3, 2, 1".
+  var shootTimer = null, shootStart = 0, lastNum = null, lastCapture = -1;
+
+  function stopShoot() {
+    if (shootTimer) { clearInterval(shootTimer); shootTimer = null; }
     shotsProgress.hidden = true;
     shotsProgress.innerHTML = "";
+    countdownNum.hidden = true;
+    countdownNum.textContent = "";
+    badgeIcon.style.display = "contents";   // restore to what morphicons wants
+    badge.classList.remove("counting");
   }
-  function shotDots(n, seconds) {
-    clearShotDots();
+
+  function pulseNum() {
+    countdownNum.classList.remove("pulse");
+    void countdownNum.offsetWidth;
+    countdownNum.classList.add("pulse");
+  }
+  function flash() {
+    flashEl.classList.remove("go");
+    void flashEl.offsetWidth;
+    flashEl.classList.add("go");
+  }
+
+  function runShoot() {
+    stopShoot();
+    var n = SHOTS;
+    var per = (SESSION_DURATION * 1000) / n;   // ms per shot cycle
+    var cd = SHOT_COUNTDOWN * 1000;            // ms of "3·2·1" per shot
+
     shotsProgress.hidden = false;
+    shotsProgress.innerHTML = "";
     for (var i = 0; i < n; i++) shotsProgress.appendChild(document.createElement("i"));
     var dots = shotsProgress.children;
-    var gap = (seconds * 1000) / n;
-    for (var k = 0; k < n; k++) {
-      (function (idx) {
-        shotTimers.push(setTimeout(function () {
-          if (dots[idx]) dots[idx].classList.add("on");
-        }, Math.round(gap * (idx + 0.55))));
-      })(k);
-    }
+
+    badgeIcon.style.display = "none";           // number takes over the badge
+    badge.classList.add("counting");
+    countdownNum.hidden = false;
+    lastNum = null;
+    lastCapture = -1;
+    shootStart = Date.now();
+
+    shootTimer = setInterval(function () {
+      var el = Date.now() - shootStart;
+      if (el >= SESSION_DURATION * 1000) { stopShoot(); return; }
+
+      var shot = Math.min(n - 1, Math.floor(el / per));
+      var within = el - shot * per;
+
+      for (var k = 0; k < n; k++) {
+        if (el >= k * per + cd) dots[k].classList.add("on");
+      }
+
+      if (within >= cd && shot > lastCapture) {   // just captured this shot
+        lastCapture = shot;
+        flash();
+      }
+
+      var num = within < cd ? Math.ceil((cd - within) / 1000) : 0;
+      if (num !== lastNum) {
+        lastNum = num;
+        countdownNum.textContent = num > 0 ? num : "";
+        if (num > 0) pulseNum();
+      }
+
+      subtextEl.textContent = "Кадр " + (shot + 1) + " з " + n;
+      subtextEl.hidden = false;
+    }, 100);
   }
 
   // ── SSE ──
