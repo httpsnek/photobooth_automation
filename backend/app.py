@@ -104,6 +104,52 @@ async def qr(text: str = "https://instabox.example/demo") -> Response:
                     headers={"Cache-Control": "public, max-age=300"})
 
 
+@app.get("/gallery", response_class=HTMLResponse)
+async def gallery(request: Request, ar: str = "10 / 16") -> HTMLResponse:
+    """All screens on one page — a link to send the client."""
+    import re
+    if not re.fullmatch(r"[\d./ ]{1,12}", ar or ""):
+        ar = "10 / 16"
+    screens = [
+        ("connecting", "Завантаження"),
+        ("awaiting_payment", "Оплата / QR"),
+        ("paid", "Оплату отримано"),
+        ("shooting", "Зйомка · відлік 3·2·1"),
+        ("printing", "Друк"),
+        ("done", "Готово"),
+        ("refunded", "Помилка · повернення"),
+        ("out_of_service", "Не працює"),
+    ]
+    cards = "".join(
+        f'<figure><div class="frame"><iframe src="/kiosk?demo={s}" '
+        f'loading="lazy" title="{t}"></iframe></div><figcaption>{t}</figcaption></figure>'
+        for s, t in screens
+    )
+    return HTMLResponse(
+        f"""<!doctype html><meta charset=utf-8>
+<meta name=viewport content="width=device-width,initial-scale=1">
+<title>{settings.booth_name} — екрани</title>
+<style>
+  :root {{ color-scheme: light; }}
+  body {{ margin:0; padding:28px; background:#f4f4f6; color:#16151a;
+         font:600 15px/1.4 "Montserrat",system-ui,sans-serif; }}
+  h1 {{ font-size:20px; margin:0 0 4px; }}
+  p.sub {{ margin:0 0 24px; color:#8a8a8e; font-weight:500; }}
+  .grid {{ display:grid; gap:24px 20px;
+           grid-template-columns:repeat(auto-fill,minmax(230px,1fr)); }}
+  figure {{ margin:0; }}
+  .frame {{ aspect-ratio:{ar}; border-radius:18px; overflow:hidden;
+            background:#fff; box-shadow:0 6px 24px rgba(0,0,0,.10); }}
+  iframe {{ width:100%; height:100%; border:0; display:block; }}
+  figcaption {{ margin-top:10px; text-align:center; color:#5a5a62; }}
+</style>
+<h1>{settings.booth_name} — усі екрани</h1>
+<p class="sub">Живий інтерфейс. «Зйомка» анімується — відлік 3·2·1 перед кожним кадром.
+ Пропорції: <code>/gallery?ar=9/19.5</code> для телефону.</p>
+<div class="grid">{cards}</div>""",
+    )
+
+
 @app.get("/events")
 async def events(request: Request) -> StreamingResponse:
     broadcaster: Broadcaster = request.app.state.broadcaster

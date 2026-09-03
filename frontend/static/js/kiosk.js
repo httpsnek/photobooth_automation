@@ -11,8 +11,12 @@
   var QR_RADIUS = parseFloat(body.dataset.qrRadius) || 1.6;
   var PRICE = parseFloat(body.dataset.price) || 0;
   var SHOTS = parseInt(body.dataset.shots, 10) || 4;
-  var SESSION_DURATION = parseFloat(body.dataset.sessionDuration) || 30;
   var SHOT_COUNTDOWN = parseInt(body.dataset.shotCountdown, 10) || 3;
+  var DEMO = new URLSearchParams(location.search).has("demo");
+  // in demo, keep SHOOTING short (countdown + ~1s capture per shot)
+  var SESSION_DURATION = DEMO
+    ? SHOTS * (SHOT_COUNTDOWN + 1)
+    : (parseFloat(body.dataset.sessionDuration) || 30);
   var SUPPORT_PHONE = (body.dataset.supportPhone || "").trim();
 
   // ── Lucide icon data (IconNode). Morphed by <morph-icon>. ──
@@ -355,79 +359,57 @@
     };
   }
 
-  // ── Demo mode (no SSE) ──────────────────────────────────
-  //   ?demo=STATE   freeze on one screen  (design / QR calibration)
-  //   ?demo         click / tap / → steps through every screen
-  //   ?demo=auto    auto-plays through every screen on a loop
+  // ── Demo mode (no SSE) ── for client demos / screen recordings ──
+  //   ?demo         tap anywhere on the screen = next screen (loops)
+  //   ?demo=auto    plays through on its own, hands-off
+  //   ?demo=STATE   freeze on one screen (e.g. ?demo=shooting)
   var params = new URLSearchParams(location.search);
   if (params.has("demo")) {
     var one = params.get("demo");
-    var qrSrc = "/qr?text=" + encodeURIComponent("https://instabox.example/demo");
-    lastQrDataUri = qrSrc;
-
-    var TOUR = ["CONNECTING", "AWAITING_PAYMENT", "PAID", "SHOOTING",
-                "PRINTING", "DONE", "REFUNDING", "REFUNDED", "OUT_OF_SERVICE"];
+    lastQrDataUri = "/qr?text=" + encodeURIComponent("https://instabox.example/demo");
 
     if (one && one !== "auto") {
       render({ state: one.toUpperCase(), price: PRICE, shots: SHOTS, seconds_left: 12 });
       return;
     }
 
+    // customer journey first, error screens last
+    var TOUR = ["AWAITING_PAYMENT", "PAID", "SHOOTING", "PRINTING", "DONE",
+                "REFUNDED", "OUT_OF_SERVICE"];
+    var HOLD_MS = {
+      AWAITING_PAYMENT: 4000, PAID: 3200,
+      SHOOTING: SESSION_DURATION * 1000 + 600,
+      PRINTING: 3600, DONE: 3600, REFUNDED: 4000, OUT_OF_SERVICE: 4000,
+    };
     var auto = one === "auto";
-    var HOLD = { AWAITING_PAYMENT: 4600, PAID: 5200 };  // give the video time
-    var ti = 0;
-    var timerEl2 = document.getElementById("timer");
+    var ti = 0, autoTimer = null, lastTap = 0;
 
-    var autoTimer = null;
-    var label = null;
     function show() {
-      var n = ((ti % TOUR.length) + TOUR.length) % TOUR.length;
-      var st = TOUR[n];
-      if (label) label.textContent = (n + 1) + " / " + TOUR.length + "  ·  " + st;
+      var st = TOUR[((ti % TOUR.length) + TOUR.length) % TOUR.length];
       render({ state: st, price: PRICE, shots: SHOTS, seconds_left: 12 });
-      timerEl2.hidden = true;
+      document.getElementById("timer").hidden = true;
       if (auto) {
         clearTimeout(autoTimer);
-        autoTimer = setTimeout(function () { ti++; show(); }, HOLD[st] || 2800);
+        autoTimer = setTimeout(function () { ti++; show(); }, HOLD_MS[st] || 3000);
       }
     }
-
-    if (auto) { show(); return; }
-
-    // ── tap-to-advance: two explicit hit zones + a counter pill ──
-    var lastNav = 0;
-    function nav(dir) {
-      var now = Date.now();
-      if (now - lastNav < 350) return;   // collapse accidental double taps
-      lastNav = now;
-      ti += dir;
-      show();
-    }
-
-    function zone(css, dir) {
-      var z = document.createElement("div");
-      z.style.cssText = "position:fixed;top:0;bottom:0;z-index:98;cursor:pointer;" + css;
-      z.addEventListener("click", function () { nav(dir); });
-      document.body.appendChild(z);
-      return z;
-    }
-    zone("left:0;width:28%", -1);        // tap left  = back
-    zone("left:28%;right:0", 1);         // tap right = next
-
-    var pill = document.createElement("div");
-    pill.style.cssText = "position:fixed;left:50%;bottom:2.6vh;translate:-50% 0;z-index:99;" +
-      "font:600 13px/1 system-ui,sans-serif;color:#a9a9b1;background:#fff;padding:9px 16px;" +
-      "border-radius:999px;box-shadow:0 3px 16px rgba(0,0,0,.1);white-space:nowrap;pointer-events:none";
-    label = document.createElement("span");
-    pill.appendChild(label);
-    document.body.appendChild(pill);
-
-    window.addEventListener("keydown", function (e) {
-      if (e.key === "ArrowRight" || e.key === " " || e.key === "Enter") nav(1);
-      else if (e.key === "ArrowLeft") nav(-1);
-    });
-
     show();
+
+    if (!auto) {
+      var advance = function () {
+        var now = Date.now();
+        if (now - lastTap < 300) return;   // debounce a stray double-fire
+        lastTap = now;
+        ti++;
+        show();
+      };
+      // tap / click anywhere; arrow keys optional
+      window.addEventListener("pointerdown", advance);
+      window.addEventListener("keydown", function (e) {
+        if (e.key === "ArrowLeft") { ti--; show(); }
+        else if (e.key !== "F5") advance();
+      });
+    }
     return;
   }
 

@@ -1,58 +1,51 @@
 # Showing the UI to the client
 
-The kiosk has a **demo mode** that runs every screen with no payment / no
-hardware:
+The kiosk has a **demo mode** — every screen, no payment, no hardware.
 
 | URL | Behaviour |
 |---|---|
-| `/kiosk?demo` | tap right = next screen, tap left = back |
-| `/kiosk?demo=auto` | auto-plays all 9 screens on a loop |
-| `/kiosk?demo=shooting` (or `paid`, `done`, `refunded`, `out_of_service`, …) | freezes on one screen |
+| `/kiosk?demo` | **tap anywhere on the screen** = next screen. Nothing visible on top. Loops. |
+| `/kiosk?demo=auto` | plays through on its own, hands-off — hit record and leave it |
+| `/kiosk?demo=shooting` (or `paid`, `done`, `refunded`, `out_of_service`, `awaiting_payment`, `printing`, `connecting`) | freezes on one screen |
+| `/gallery` | all screens on one scrollable page (add `?ar=9/19.5` for phone proportions) |
 
-Screens shown: connecting · **QR / оплата** · оплату отримано · дивіться в
-камеру (+4 dots) · друкуємо · готово · повертаємо кошти · помилка · не працює.
+Tour order (both `?demo` and `?demo=auto`): QR/оплата → оплату отримано →
+зйомка (3·2·1 per shot) → друк → готово → помилка → не працює → back to start.
+In demo the shooting phase is shortened so the recording isn't long.
 
 ---
 
-## 1. Best fidelity — the real tablet
+## Making a screen recording
 
-This is exactly what the guest sees. On the Android tablet, open Chrome /
-Fully Kiosk at `http://<your-machine>:8000/kiosk?demo` (same Wi-Fi) or the
-tunnel URL below. Real size, real font, real animations.
+1. Open `…/kiosk?demo=auto` on the tablet (or any phone/laptop) — for a
+   hands-off clip; or `…/kiosk?demo` if you want to control the pacing by tapping.
+2. Full-screen the browser (F11 on desktop, or Fully Kiosk / add-to-home on the tablet).
+3. Record:
+   - **Android tablet**: built-in screen recorder (swipe-down quick settings).
+   - **Mac**: ⇧⌘5.
+   - **Windows**: Win+G (Game Bar) or ⊞+Alt+R.
+4. For `?demo` — tap through at a calm pace, ~2–3 s per screen.
 
-## 2. Fastest shareable link — Cloudflare quick tunnel
+---
 
-Run the app, then in another terminal:
+## Getting a URL the client can open
+
+**Fastest — Cloudflare quick tunnel** (`cloudflared` is already installed):
 
 ```bash
-# one-time: brew install cloudflared   (or download the binary)
-uvicorn backend.app:app --port 8000        # terminal 1
-cloudflared tunnel --url http://localhost:8000   # terminal 2
+uvicorn backend.app:app --port 8000            # terminal 1
+cloudflared tunnel --url http://localhost:8000  # terminal 2
 ```
 
-`cloudflared` prints an `https://<random>.trycloudflare.com` URL — send it
-to the client, they open `…/kiosk?demo` on their own phone/tablet. Works
-while your machine stays on. No account needed.
+It prints `https://<random>.trycloudflare.com` — send `…/kiosk?demo` to the
+client. Works while your machine stays on, no account.
 
-## 3. Permanent link — deploy the demo
-
-There's a `Dockerfile`. Any Python/Docker host works (Render, Railway,
-Fly.io — all have a free tier):
-
-- **Render**: New → Web Service → connect the repo → it detects the
-  Dockerfile → deploy. Env: `PAYMENT_PROVIDER=mock`. Done — permanent
-  `https://…onrender.com/kiosk?demo` the client can revisit anytime.
-
-(The free tier sleeps after ~15 min idle; first hit takes ~30 s to wake.)
-
-## 4. Zero-setup — send a video
-
-Open `/kiosk?demo=auto` on a tablet-sized window and screen-record one full
-loop (~40 s). Send the clip. No interactivity, but nothing for the client
-to install.
+**Permanent — deploy** the `Dockerfile` to Render / Railway / Fly (free tier):
+Render → New → Web Service → pick the repo → it detects the Dockerfile →
+env `PAYMENT_PROVIDER=mock`. Now `https://…onrender.com/kiosk?demo` is always up.
 
 ---
 
-**Before the demo:** decide tablet **orientation** (portrait vs landscape) —
-the layout adapts, but the client should see it in the orientation it will
-actually hang. Set your preview window / tablet accordingly.
+**Before recording:** decide the tablet **orientation** and set the browser
+window / device to match — the layout adapts, but the client should see it
+the way it will actually hang.

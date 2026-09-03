@@ -143,10 +143,11 @@ html, body {
   gap: clamp(10px, 1.8vh, 18px);
 }
 
-/* the awaiting fallback is a full stack, not a single hero — centre it */
+/* the awaiting screen is a full stack, not a single hero — centre the stack
+   between the logo and the bottom edge */
 #screen:has(#awaiting:not([hidden])) {
   justify-content: center;
-  padding-top: min(16vh, 110px);
+  padding: min(16vh, 112px) 9vw min(9vh, 68px);
   gap: clamp(18px, 3.4vh, 34px);
 }
 
