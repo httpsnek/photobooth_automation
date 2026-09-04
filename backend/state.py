@@ -53,6 +53,11 @@ class Session:
     trigger_attempts: int = 0
     # transient, not persisted: when the current timed phase ends
     phase_deadline: float | None = None
+    # transient SHOOTING sub-phase (driven by dslrBooth events, or by the
+    # timed fallback). shoot_phase: "" | get_ready | counting | capture | processing
+    shoot_phase: str = ""
+    shot: int = 0                       # current shot, 1-based; 0 before the first countdown
+    countdown_deadline: float | None = None   # when the current 3·2·1 reaches zero
 
     def new_cycle(self) -> None:
         """Reset to a fresh IDLE session, keeping nothing from the previous one."""
@@ -78,6 +83,22 @@ CREATE INDEX IF NOT EXISTS idx_sessions_invoice ON sessions(invoice_id);
 CREATE INDEX IF NOT EXISTS idx_sessions_created ON sessions(created_at);
 
 CREATE TABLE IF NOT EXISTS kv (k TEXT PRIMARY KEY, v TEXT NOT NULL);
+
+-- money that must go back to a card but the refund call hasn't confirmed yet.
+-- kind='watch'  : invoice abandoned on our side — poll it; if it turns out paid,
+--                 flip to kind='refund' (guest already left, auto-return).
+-- kind='refund' : refund owed — retry provider.refund() until 'reversed'.
+CREATE TABLE IF NOT EXISTS pending_refunds (
+    invoice_id  TEXT PRIMARY KEY,
+    booth_id    TEXT,
+    session_id  TEXT,
+    amount_uah  INTEGER NOT NULL DEFAULT 0,
+    reason      TEXT DEFAULT '',
+    kind        TEXT NOT NULL DEFAULT 'refund',
+    attempts    INTEGER NOT NULL DEFAULT 0,
+    next_try    REAL NOT NULL DEFAULT 0,
+    created_at  REAL NOT NULL
+);
 """
 
 
@@ -148,15 +169,77 @@ class SessionStore:
             row = await cur.fetchone()
             return dict(row) if row else None
 
-    async def seen_invoice(self, invoice_id: str) -> bool:
+    async def seen_invoice(self, invoice_id: str, exclude_id: str = "") -> bool:
+        """True if some OTHER session row already acted on this invoice
+        (idempotency guard against a duplicated PAID → run_session)."""
         if not invoice_id:
             return False
         async with aiosqlite.connect(self._path) as db:
             cur = await db.execute(
-                "SELECT 1 FROM sessions WHERE invoice_id = ? AND state != ? LIMIT 1",
-                (invoice_id, State.IDLE.value),
+                "SELECT 1 FROM sessions WHERE invoice_id = ? AND id != ? "
+                "AND state != ? LIMIT 1",
+                (invoice_id, exclude_id, State.IDLE.value),
             )
             return await cur.fetchone() is not None
+
+    # ── pending refunds / abandoned-invoice watch ──────────────────
+    async def enqueue_refund(self, *, invoice_id: str, session_id: str,
+                             amount_uah: int, reason: str, kind: str = "refund",
+                             next_try: float = 0.0) -> None:
+        if not invoice_id:
+            return
+        async with aiosqlite.connect(self._path) as db:
+            await db.execute(
+                """INSERT INTO pending_refunds
+                     (invoice_id, booth_id, session_id, amount_uah, reason, kind,
+                      attempts, next_try, created_at)
+                   VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?)
+                   ON CONFLICT(invoice_id) DO NOTHING""",
+                (invoice_id, settings.booth_id, session_id, amount_uah, reason,
+                 kind, next_try, time.time()),
+            )
+            await db.commit()
+
+    async def due_pending(self, now: float) -> list[dict]:
+        async with aiosqlite.connect(self._path) as db:
+            db.row_factory = aiosqlite.Row
+            cur = await db.execute(
+                "SELECT * FROM pending_refunds WHERE next_try <= ? ORDER BY next_try",
+                (now,),
+            )
+            return [dict(r) for r in await cur.fetchall()]
+
+    async def update_pending(self, invoice_id: str, *, kind: str | None = None,
+                             attempts: int | None = None,
+                             next_try: float | None = None,
+                             reason: str | None = None) -> None:
+        sets, vals = [], []
+        for col, v in (("kind", kind), ("attempts", attempts),
+                       ("next_try", next_try), ("reason", reason)):
+            if v is not None:
+                sets.append(f"{col} = ?")
+                vals.append(v)
+        if not sets:
+            return
+        vals.append(invoice_id)
+        async with aiosqlite.connect(self._path) as db:
+            await db.execute(
+                f"UPDATE pending_refunds SET {', '.join(sets)} WHERE invoice_id = ?",
+                vals,
+            )
+            await db.commit()
+
+    async def drop_pending(self, invoice_id: str) -> None:
+        async with aiosqlite.connect(self._path) as db:
+            await db.execute(
+                "DELETE FROM pending_refunds WHERE invoice_id = ?", (invoice_id,)
+            )
+            await db.commit()
+
+    async def pending_count(self) -> int:
+        async with aiosqlite.connect(self._path) as db:
+            cur = await db.execute("SELECT COUNT(*) FROM pending_refunds")
+            return int((await cur.fetchone())[0])
 
     async def stats_since(self, ts: float) -> tuple[int, int, int]:
         """(session_count, revenue_uah, prints) for DONE sessions since ts."""
@@ -218,4 +301,9 @@ def snapshot(s: Session) -> dict:
     if s.state == State.AWAITING_PAYMENT:
         snap["pay_url"] = s.pay_url
         # qr_data_uri is injected by the controller (needs the qr module)
+    if s.state == State.SHOOTING:
+        snap["shoot_phase"] = s.shoot_phase or "get_ready"
+        snap["shot"] = s.shot
+        if s.shoot_phase == "counting" and s.countdown_deadline is not None:
+            snap["countdown_ms_left"] = max(0, round((s.countdown_deadline - now) * 1000))
     return snap

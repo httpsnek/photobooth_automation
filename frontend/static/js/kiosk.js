@@ -38,7 +38,8 @@
     DONE:             { icon: "check", badge: "ok", headline: "Готово!", sub: "Забирайте фото знизу" },
     REFUNDING:        { loader: true, headline: "Повертаємо кошти…" },
     REFUNDED:         { icon: "undo", badge: "warn", headline: "Сталася помилка", sub: "Кошти повернено на картку", support: true },
-    OUT_OF_SERVICE:   { icon: "wrench", badge: "warn", headline: "Тимчасово не працює", support: true }
+    OUT_OF_SERVICE:   { icon: "wrench", badge: "warn", headline: "Тимчасово не працює",
+                        sub: "Спробуйте, будь ласка, трохи пізніше", support: true, retry: true }
   };
   var COUNTDOWN_STATES = { PRINTING: 1 };  // SHOOTING shows its own per-shot count
 
@@ -201,7 +202,7 @@
 
     if (supportEl) {
       if (cfg.support && SUPPORT_PHONE) {
-        supportEl.textContent = "Підтримка: " + SUPPORT_PHONE;
+        supportEl.textContent = (cfg.retry ? "Або зателефонуйте: " : "Підтримка: ") + SUPPORT_PHONE;
         supportEl.hidden = false;
       } else {
         supportEl.hidden = true;
@@ -254,30 +255,28 @@
     }
 
     qrOverlay.hidden = true;
-    showHtmlLayer(cfg, st);
 
-    if (st === "SHOOTING" && state !== "SHOOTING") runShoot();
-    else if (st !== "SHOOTING") stopShoot();
+    if (st === "SHOOTING") {
+      renderShoot(snap);
+    } else {
+      if (state === "SHOOTING") leaveShoot();
+      showHtmlLayer(cfg, st);
+    }
 
     if (COUNTDOWN_STATES[st]) startCountdown(snap.seconds_left);
     else stopCountdown();
     state = st;
   }
 
-  // ── per-shot "3·2·1" countdown across the shooting window ──
-  //   Approximate — no per-frame signal without dslrBooth Pro. Even a small
-  //   offset still does the job: people see "get ready, 3, 2, 1".
-  var shootTimer = null, shootStart = 0, lastNum = null, lastCapture = -1;
+  // ── SHOOTING sub-phases — driven by the server snapshot ─────────────
+  //   snap.shoot_phase : get_ready | counting | capture | processing
+  //   snap.shot (1-based) · snap.shots · snap.countdown_ms_left
+  //   With dslrBooth Pro "Trigger" events these track the real camera; without
+  //   them the backend still emits the same phases on an estimated schedule.
+  var cdTimer = null;
+  var shootReady = false;
 
-  function stopShoot() {
-    if (shootTimer) { clearInterval(shootTimer); shootTimer = null; }
-    shotsProgress.hidden = true;
-    shotsProgress.innerHTML = "";
-    countdownNum.hidden = true;
-    countdownNum.textContent = "";
-    badgeIcon.style.display = "contents";   // restore to what morphicons wants
-    badge.classList.remove("counting");
-  }
+  function clearCd() { if (cdTimer) { clearInterval(cdTimer); cdTimer = null; } }
 
   function pulseNum() {
     countdownNum.classList.remove("pulse");
@@ -290,50 +289,87 @@
     flashEl.classList.add("go");
   }
 
-  function runShoot() {
-    stopShoot();
-    var n = SHOTS;
-    var per = (SESSION_DURATION * 1000) / n;   // ms per shot cycle
-    var cd = SHOT_COUNTDOWN * 1000;            // ms of "3·2·1" per shot
+  function setDots(total, done) {
+    if (shotsProgress.childElementCount !== total) {
+      shotsProgress.innerHTML = "";
+      for (var i = 0; i < total; i++) shotsProgress.appendChild(document.createElement("i"));
+    }
+    var kids = shotsProgress.children;
+    for (var k = 0; k < kids.length; k++) kids[k].classList.toggle("on", k < done);
+    shotsProgress.hidden = total <= 0;
+  }
 
-    shotsProgress.hidden = false;
-    shotsProgress.innerHTML = "";
-    for (var i = 0; i < n; i++) shotsProgress.appendChild(document.createElement("i"));
-    var dots = shotsProgress.children;
+  // true  -> big number takes the badge (solid pink)
+  // false -> the morphed icon shows
+  function showNumber(on) {
+    badge.classList.toggle("counting", on);
+    if (!on) { clearCd(); countdownNum.textContent = ""; }
+  }
 
-    badgeIcon.style.display = "none";           // number takes over the badge
-    badge.classList.add("counting");
-    countdownNum.hidden = false;
-    lastNum = null;
-    lastCapture = -1;
-    shootStart = Date.now();
-
-    shootTimer = setInterval(function () {
-      var el = Date.now() - shootStart;
-      if (el >= SESSION_DURATION * 1000) { stopShoot(); return; }
-
-      var shot = Math.min(n - 1, Math.floor(el / per));
-      var within = el - shot * per;
-
-      for (var k = 0; k < n; k++) {
-        if (el >= k * per + cd) dots[k].classList.add("on");
+  // count 3·2·1 down locally from the ms the server reported; each new
+  // "counting" snapshot (next shot) resyncs it.
+  function localCountdown(msLeft) {
+    clearCd();
+    if (msLeft == null) { countdownNum.textContent = ""; return; }
+    var end = Date.now() + msLeft;
+    var paint = function () {
+      var rem = end - Date.now();
+      var n = rem > 0 ? Math.ceil(rem / 1000) : 0;
+      var txt = n > 0 ? String(n) : "";
+      if (txt !== countdownNum.textContent) {
+        countdownNum.textContent = txt;
+        if (n > 0) pulseNum();
       }
+      if (rem <= -250) clearCd();
+    };
+    paint();
+    cdTimer = setInterval(paint, 100);
+  }
 
-      if (within >= cd && shot > lastCapture) {   // just captured this shot
-        lastCapture = shot;
-        flash();
-      }
+  function renderShoot(snap) {
+    if (state !== "SHOOTING" || !shootReady) {
+      showHtmlLayer(UI.SHOOTING, "SHOOTING");   // morph check -> camera, set headline
+      countdownNum.hidden = false;
+      shootReady = true;
+    }
+    var total = snap.shots || SHOTS;
+    var shot = snap.shot || 0;
+    var phase = snap.shoot_phase || "get_ready";
 
-      var num = within < cd ? Math.ceil((cd - within) / 1000) : 0;
-      if (num !== lastNum) {
-        lastNum = num;
-        countdownNum.textContent = num > 0 ? num : "";
-        if (num > 0) pulseNum();
-      }
-
-      subtextEl.textContent = "Кадр " + (shot + 1) + " з " + n;
+    if (phase === "get_ready") {
+      showNumber(false);
+      headlineEl.textContent = "Дивіться в камеру!";
+      subtextEl.hidden = true;
+      setDots(total, 0);
+    } else if (phase === "counting") {
+      headlineEl.textContent = "Дивіться в камеру!";
+      subtextEl.textContent = "Кадр " + Math.max(1, shot) + " з " + total;
       subtextEl.hidden = false;
-    }, 100);
+      setDots(total, Math.max(0, shot - 1));
+      showNumber(true);
+      localCountdown(typeof snap.countdown_ms_left === "number" ? snap.countdown_ms_left : null);
+    } else if (phase === "capture") {
+      badge.classList.add("counting");   // badge stays solid pink through the burst
+      clearCd();
+      countdownNum.textContent = "";
+      flash();
+      setDots(total, shot);
+    } else if (phase === "processing") {
+      showNumber(false);
+      headlineEl.textContent = "Майже готово…";
+      subtextEl.hidden = true;
+      setDots(total, total);
+    }
+  }
+
+  function leaveShoot() {
+    clearCd();
+    shootReady = false;
+    badge.classList.remove("counting");
+    countdownNum.hidden = true;
+    countdownNum.textContent = "";
+    shotsProgress.hidden = true;
+    shotsProgress.innerHTML = "";
   }
 
   // ── SSE ──
@@ -363,13 +399,42 @@
   //   ?demo         tap anywhere on the screen = next screen (loops)
   //   ?demo=auto    plays through on its own, hands-off
   //   ?demo=STATE   freeze on one screen (e.g. ?demo=shooting)
+  //   The SHOOTING step plays its real sub-phases (get-ready → 3·2·1 ×N →
+  //   processing); every other screen is its own independent block.
   var params = new URLSearchParams(location.search);
   if (params.has("demo")) {
     var one = params.get("demo");
     lastQrDataUri = "/qr?text=" + encodeURIComponent("https://instabox.example/demo");
+    var demoShootTimer = null;
+
+    function demoShootFrames() {
+      var n = SHOTS, cd = SHOT_COUNTDOWN * 1000;
+      var f = [{ shoot_phase: "get_ready", shot: 0, hold: 1800 }];
+      for (var i = 1; i <= n; i++) {
+        f.push({ shoot_phase: "counting", shot: i, countdown_ms_left: cd, hold: cd });
+        f.push({ shoot_phase: "capture", shot: i, hold: 460 });
+      }
+      f.push({ shoot_phase: "processing", shot: n, hold: 1100 });
+      return f;
+    }
+    function demoShoot(onDone) {
+      var frames = demoShootFrames(), i = 0;
+      (function step() {
+        if (i >= frames.length) { if (onDone) onDone(); return; }
+        var fr = frames[i++];
+        render({
+          state: "SHOOTING", price: PRICE, shots: SHOTS,
+          shoot_phase: fr.shoot_phase, shot: fr.shot,
+          countdown_ms_left: fr.countdown_ms_left,
+        });
+        demoShootTimer = setTimeout(step, fr.hold);
+      })();
+    }
 
     if (one && one !== "auto") {
-      render({ state: one.toUpperCase(), price: PRICE, shots: SHOTS, seconds_left: 12 });
+      var S = one.toUpperCase();
+      if (S === "SHOOTING") { (function loop() { demoShoot(loop); })(); return; }
+      render({ state: S, price: PRICE, shots: SHOTS, seconds_left: 12 });
       return;
     }
 
@@ -377,19 +442,24 @@
     var TOUR = ["AWAITING_PAYMENT", "PAID", "SHOOTING", "PRINTING", "DONE",
                 "REFUNDED", "OUT_OF_SERVICE"];
     var HOLD_MS = {
-      AWAITING_PAYMENT: 4000, PAID: 3200,
-      SHOOTING: SESSION_DURATION * 1000 + 600,
+      AWAITING_PAYMENT: 4000, PAID: 3000,
       PRINTING: 3600, DONE: 3600, REFUNDED: 4000, OUT_OF_SERVICE: 4000,
     };
     var auto = one === "auto";
     var ti = 0, autoTimer = null, lastTap = 0;
 
     function show() {
+      clearTimeout(autoTimer);
+      clearTimeout(demoShootTimer);
       var st = TOUR[((ti % TOUR.length) + TOUR.length) % TOUR.length];
-      render({ state: st, price: PRICE, shots: SHOTS, seconds_left: 12 });
       document.getElementById("timer").hidden = true;
+
+      if (st === "SHOOTING") {
+        demoShoot(auto ? function () { ti++; show(); } : null);
+        return;
+      }
+      render({ state: st, price: PRICE, shots: SHOTS, seconds_left: 12 });
       if (auto) {
-        clearTimeout(autoTimer);
         autoTimer = setTimeout(function () { ti++; show(); }, HOLD_MS[st] || 3000);
       }
     }

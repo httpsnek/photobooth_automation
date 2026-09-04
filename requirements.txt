@@ -6,5 +6,6 @@ jinja2>=3.1
 python-dotenv>=1.0
 qrcode[pil]>=7.4
 cryptography>=42.0            # Monobank webhook signature check
+psutil>=5.9                   # dslrBooth process liveness check (hotkey mode)
 # Windows-only, used by the hotkey dslrBooth trigger. Skipped on macOS/Linux dev.
 pyautogui>=0.9.54 ; platform_system == "Windows"

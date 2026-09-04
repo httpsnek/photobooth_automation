@@ -13,6 +13,12 @@ for /f "usebackq tokens=1,* delims==" %%A in (".env") do (
 )
 if not defined PORT set "PORT=8000"
 
+rem ── external watchdog: restarts a wedged backend so this loop can recover it.
+rem    Safe to start every time — a pidfile lock keeps it to one instance.
+if exist "%~dp0watchdog.py" (
+  start "InstaBOX-watchdog" /min "%~dp0watchdog.bat"
+)
+
 :loop
 echo [InstaBOX] starting backend on port %PORT%  (%date% %time%)
 ".venv\Scripts\python.exe" -m uvicorn backend.app:app --host 0.0.0.0 --port %PORT%

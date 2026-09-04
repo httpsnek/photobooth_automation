@@ -80,6 +80,15 @@ if (-not (Test-Path ".env")) {
   Write-Host ".env already exists — leaving it untouched."
 }
 
+# nag about anything important that's still blank
+$envText = Get-Content ".env" -Raw
+if ($envText -notmatch '(?m)^\s*SUPPORT_PHONE\s*=\s*\S') {
+  Write-Host "Warning: SUPPORT_PHONE is empty — stranded customers won't see a phone number on the error screen." -ForegroundColor Yellow
+}
+if ($envText -match '(?m)^\s*PAYMENT_PROVIDER\s*=\s*monobank' -and $envText -notmatch '(?m)^\s*BANK_TOKEN\s*=\s*\S') {
+  Write-Host "Warning: PAYMENT_PROVIDER=monobank but BANK_TOKEN is empty." -ForegroundColor Yellow
+}
+
 # ── 4. autostart via Scheduled Task ─────────────────────────────
 Section "Autostart"
 $boothId = (Select-String -Path ".env" -Pattern '^\s*BOOTH_ID\s*=\s*(.+)$').Matches[0].Groups[1].Value.Trim()
@@ -89,18 +98,35 @@ $runBat = Join-Path $PSScriptRoot "run.bat"
 schtasks /Query /TN $taskName >$null 2>&1
 if ($LASTEXITCODE -eq 0) { schtasks /Delete /TN $taskName /F >$null }
 
-$action  = New-ScheduledTaskAction -Execute $runBat -WorkingDirectory $PSScriptRoot
+$set = New-ScheduledTaskSettingsSet -RestartCount 999 -RestartInterval (New-TimeSpan -Minutes 1) `
+         -MultipleInstances IgnoreNew -ExecutionTimeLimit ([TimeSpan]::Zero) `
+         -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
 $trigger = New-ScheduledTaskTrigger -AtLogOn
-$set     = New-ScheduledTaskSettingsSet -RestartCount 999 -RestartInterval (New-TimeSpan -Minutes 1) `
-             -MultipleInstances IgnoreNew -ExecutionTimeLimit ([TimeSpan]::Zero) `
-             -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
+
+$action = New-ScheduledTaskAction -Execute $runBat -WorkingDirectory $PSScriptRoot
 Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Settings $set `
   -RunLevel Highest -Force | Out-Null
 Write-Host "Scheduled task '$taskName' registered (starts at logon, auto-restarts)."
 
+# external watchdog — restarts the backend if it wedges (run.bat also starts it;
+# a pidfile lock keeps it single). Own task so it survives even if run.bat is killed.
+$wdName = "InstaBOX-watchdog-$boothId"
+$wdPy   = Join-Path $PSScriptRoot "watchdog.py"
+$venvPy = Join-Path $PSScriptRoot ".venv\Scripts\python.exe"
+if ((Test-Path $wdPy) -and (Test-Path $venvPy)) {
+  schtasks /Query /TN $wdName >$null 2>&1
+  if ($LASTEXITCODE -eq 0) { schtasks /Delete /TN $wdName /F >$null }
+  $wdAction = New-ScheduledTaskAction -Execute $venvPy -Argument "`"$wdPy`"" `
+                -WorkingDirectory $PSScriptRoot
+  Register-ScheduledTask -TaskName $wdName -Action $wdAction -Trigger $trigger -Settings $set `
+    -RunLevel Highest -Force | Out-Null
+  Write-Host "Scheduled task '$wdName' registered (external process watchdog)."
+}
+
 # ── done ───────────────────────────────────────────────────────
 Section "Done"
 Write-Host "Start now:   schtasks /Run /TN $taskName"
+if ((Test-Path $wdPy) -and (Test-Path $venvPy)) { Write-Host "             schtasks /Run /TN $wdName" }
 Write-Host "Kiosk URL:   http://localhost:$port/kiosk"
 if ($ip) { Write-Host "For the tablet (Fully Kiosk):  http://$ip`:$port/kiosk" -ForegroundColor Green }
 Write-Host "Owner status page:  http://localhost:$port/status"

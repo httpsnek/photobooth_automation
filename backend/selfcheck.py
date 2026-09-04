@@ -45,6 +45,13 @@ async def check_acquirer() -> None:
 
 
 async def check_dslrbooth() -> None:
+    if settings.dslrbooth_events_enabled:
+        tok = "with token" if settings.dslrbooth_event_token else "NO TOKEN (unauthenticated)"
+        line(OK if settings.dslrbooth_event_token else WARN, "dslrbooth events",
+             f"on · put /dslrbooth/event {tok} as a Trigger URL in dslrBooth Pro")
+    else:
+        line(WARN, "dslrbooth events", "off — screens run on the SESSION_DURATION_SEC timers")
+
     if settings.fake_trigger_ok:
         line(WARN, "dslrbooth", "FAKE_TRIGGER_OK=1 — camera will not fire")
         return
@@ -91,6 +98,54 @@ def check_disk() -> None:
         line(FAIL, "disk", str(exc))
 
 
+async def check_printer() -> None:
+    from . import printer
+    if not settings.printer_check_enabled:
+        line(WARN, "printer", "PRINTER_CHECK_ENABLED=0 — no paper-jam / offline detection")
+        return
+    if sys.platform != "win32":
+        line(WARN, "printer", "not Windows — printer status check is a no-op here")
+        return
+    problem = await printer.printer_problem()
+    if problem:
+        line(FAIL, "printer", problem)
+    else:
+        line(OK, "printer", settings.printer_name or "default printer — status normal")
+
+
+async def check_pending_refunds() -> None:
+    from .state import SessionStore
+    try:
+        store = SessionStore()
+        await store.init()
+        n = await store.pending_count()
+        line(WARN if n else OK, "refund queue",
+             f"{n} pending" if n else "empty")
+    except Exception as exc:
+        line(WARN, "refund queue", f"could not read: {exc}")
+
+
+def check_watchdog() -> None:
+    from .config import BASE_DIR
+    if not (BASE_DIR / "watchdog.py").exists():
+        line(WARN, "watchdog", "watchdog.py missing — no external process guard")
+        return
+    if sys.platform == "win32":
+        import subprocess
+        try:
+            out = subprocess.run(["schtasks", "/Query", "/TN",
+                                  f"InstaBOX-watchdog-{settings.booth_id}"],
+                                 capture_output=True, text=True, timeout=8)
+            if out.returncode == 0:
+                line(OK, "watchdog", "scheduled task registered")
+            else:
+                line(WARN, "watchdog", "no scheduled task — re-run setup.ps1 (run.bat still starts it)")
+        except Exception as exc:
+            line(WARN, "watchdog", f"could not query task: {exc}")
+    else:
+        line(OK, "watchdog", "present (Windows task check skipped)")
+
+
 async def main() -> int:
     print(f"InstaBOX selfcheck  ·  v{VERSION}  ·  booth {settings.booth_id} ({settings.booth_name})\n")
     for w in settings.warnings():
@@ -98,6 +153,9 @@ async def main() -> int:
     check_disk()
     await check_acquirer()
     await check_dslrbooth()
+    await check_printer()
+    await check_pending_refunds()
+    check_watchdog()
     await check_telegram()
     print("\nDone. FAIL = fix before going live, WARN = intentional or later.")
     return 0

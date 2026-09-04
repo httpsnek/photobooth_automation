@@ -11,12 +11,66 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import sys
 
 import httpx
 
 from .config import settings
 
 log = logging.getLogger("dslrbooth")
+
+
+def _proc_names() -> set[str]:
+    return {n.strip().lower() for n in settings.dslrbooth_proc_names.split(",") if n.strip()}
+
+
+def _booth_process_running() -> bool:
+    """True if a dslrBooth process is running. Best-effort, cross-platform."""
+    wanted = _proc_names()
+    if not wanted:
+        return True
+    try:
+        import psutil
+        for p in psutil.process_iter(["name"]):
+            if (p.info.get("name") or "").lower() in wanted:
+                return True
+        return False
+    except Exception:
+        pass
+    # psutil missing → OS fallbacks
+    try:
+        import subprocess
+        if sys.platform == "win32":
+            out = subprocess.run(
+                ["tasklist", "/NH", "/FO", "CSV"],
+                capture_output=True, text=True, timeout=6,
+            ).stdout.lower()
+        else:
+            out = subprocess.run(
+                ["ps", "-A", "-o", "comm="],
+                capture_output=True, text=True, timeout=6,
+            ).stdout.lower()
+        return any(name.split(".")[0] in out for name in wanted)
+    except Exception as exc:  # can't check → don't brick the booth
+        log.debug("process check unavailable: %s", exc)
+        return True
+
+
+def _booth_window_foreground() -> bool:
+    """Windows only: True if the active window looks like dslrBooth."""
+    if sys.platform != "win32":
+        return True
+    try:
+        import ctypes
+        u32 = ctypes.windll.user32
+        hwnd = u32.GetForegroundWindow()
+        length = u32.GetWindowTextLengthW(hwnd)
+        buf = ctypes.create_unicode_buffer(length + 1)
+        u32.GetWindowTextW(hwnd, buf, length + 1)
+        return "dslrbooth" in (buf.value or "").lower()
+    except Exception as exc:
+        log.debug("foreground check unavailable: %s", exc)
+        return True
 
 
 class BoothTrigger:
@@ -47,7 +101,16 @@ class HotkeyTrigger(BoothTrigger):
             return False
 
     async def healthy(self) -> bool:
-        # No feedback channel without Pro — assume ok.
+        # Basic dslrBooth has no feedback channel. A blind keypress that lands
+        # nowhere = paid customer, no photos, no refund — so the least we can
+        # do is confirm the app is actually running before selling a session.
+        if not await asyncio.to_thread(_booth_process_running):
+            log.warning("dslrBooth process not found — booth unhealthy")
+            return False
+        if settings.dslrbooth_require_foreground:
+            if not await asyncio.to_thread(_booth_window_foreground):
+                log.warning("dslrBooth window not in the foreground — booth unhealthy")
+                return False
         return True
 
 

@@ -10,6 +10,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Stre
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
+from .booth_events import BoothEventRouter
 from .config import VERSION, BASE_DIR, settings
 from .controller import Controller
 from .dslrbooth import build_trigger
@@ -39,11 +40,12 @@ async def lifespan(app: FastAPI):
     app.state.provider = provider
     app.state.trigger = trigger
     app.state.broadcaster = broadcaster
+    app.state.booth_events = BoothEventRouter(controller)
 
     task = asyncio.create_task(controller.run(), name="controller")
-    log.info("started %s v%s  provider=%s trigger=%s  %s %s",
+    log.info("started %s v%s  provider=%s trigger=%s events=%s  %s %s",
              settings.booth_id, VERSION, provider.name, trigger.name,
-             settings.price_uah, settings.currency)
+             settings.dslrbooth_events_enabled, settings.price_uah, settings.currency)
     try:
         yield
     finally:
@@ -79,6 +81,7 @@ async def kiosk(request: Request) -> HTMLResponse:
         request,
         "kiosk.html",
         {
+            "version": VERSION,
             "booth_name": settings.booth_name,
             "support_phone": settings.support_phone,
             "price": settings.price_uah,
@@ -195,10 +198,14 @@ async def status_page(request: Request) -> HTMLResponse:
         ("Точка", f"{s['booth_name']} ({s['booth_id']})"),
         ("Версія", s["version"]),
         ("Стан", s["state"] + ("  ⏸ ПАУЗА" if s["paused"] else "")),
-        ("Оплата / тригер", f"{s['provider']} / {s['trigger']}"),
+        ("Оплата / тригер", f"{s['provider']} / {s['trigger']}"
+                            + ("  · події dslrBooth" if s.get("events") else "  · таймери")),
         ("Аптайм", f"{s['uptime_sec'] // 3600} год {s['uptime_sec'] % 3600 // 60} хв"),
         ("Сьогодні", f"{t['sessions']} сесій · {t['revenue']} {settings.currency} · {t['prints']} фото"),
         ("Папір", "—" if paper is None else f"≈ {paper} відбитків"),
+        ("Черга повернень", "—" if not s.get("pending_refunds")
+                            else f"⚠️ {s['pending_refunds']}"),
+        ("Блокування", s.get("block_reason") or "—"),
         ("Остання помилка", s["last_error"] or "—"),
     ]
     body = "".join(f"<tr><th>{k}</th><td>{v}</td></tr>" for k, v in rows)
@@ -252,6 +259,21 @@ async def webhook(request: Request) -> Response:
         log.warning("webhook rejected (bad or missing signature)")
         return Response(status_code=403)
     _ctrl(request).notify_payment_hint()
+    return Response(status_code=200)
+
+
+# ───────────────────────── dslrBooth Trigger events ─────────────────────────
+@app.api_route("/dslrbooth/event", methods=["GET", "POST"], include_in_schema=False)
+async def dslrbooth_event(request: Request) -> Response:
+    """dslrBooth Pro → Settings › General › Triggers → this URL.
+    It calls us (HTTP GET) with ?event_type=…&param1=… on every session event.
+    """
+    q = request.query_params
+    if settings.dslrbooth_event_token and q.get("token") != settings.dslrbooth_event_token:
+        log.warning("dslrbooth event rejected (bad token)")
+        return Response(status_code=403)
+    params = dict(q)
+    await request.app.state.booth_events.handle(params.get("event_type", ""), params)
     return Response(status_code=200)
 
 

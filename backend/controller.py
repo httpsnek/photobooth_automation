@@ -6,17 +6,22 @@ the FSM is advanced from exactly one place.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import time
 
 import httpx
 
-from . import notify, payment
+from . import notify, payment, printer
 from .config import VERSION, settings
 from .dslrbooth import BoothTrigger
 from .payment import PaymentProvider
 from .qr import qr_data_uri
 from .state import Broadcaster, Session, SessionStore, State, snapshot
+
+# states where a paid guest is mid-flow: if the controller ever lands back in
+# _tick() with one of these, the session loop died — recover + refund.
+_WORK_STATES = {State.PAID, State.SHOOTING, State.PRINTING, State.REFUNDING}
 
 log = logging.getLogger("controller")
 
@@ -42,10 +47,38 @@ class Controller:
         self._paused_by = ""
         self._summary_marker = time.strftime("%Y-%m-%d")
         self._paper_base = 0        # print count when the current roll went in
+        # dslrBooth Trigger events (Pro): the router feeds them here, the
+        # session loop consumes them instead of sleeping on fixed timers.
+        self._booth_events: asyncio.Queue[tuple[str, dict]] = asyncio.Queue(maxsize=64)
+        self._last_booth_event_at = 0.0
+        self._triggered_invoice = ""   # in-memory dup guard for _run_session
+        self._preflight_block = ""     # last reason the booth refused to sell
 
     # ───────────────────────── public API ─────────────────────────
     def notify_payment_hint(self) -> None:
         self._payment_hint.set()
+
+    async def on_booth_event(self, kind: str, data: dict | None = None) -> None:
+        """Called by BoothEventRouter for each dslrBooth Trigger callback."""
+        self._last_booth_event_at = time.time()
+        item = (kind, data or {})
+        try:
+            self._booth_events.put_nowait(item)
+        except asyncio.QueueFull:
+            # keep the newest — an old backlog is worthless
+            try:
+                self._booth_events.get_nowait()
+            except asyncio.QueueEmpty:
+                pass
+            with contextlib.suppress(asyncio.QueueFull):
+                self._booth_events.put_nowait(item)
+
+    def _drain_booth_events(self) -> None:
+        while not self._booth_events.empty():
+            try:
+                self._booth_events.get_nowait()
+            except asyncio.QueueEmpty:
+                break
 
     def stop(self) -> None:
         self._stop.set()
@@ -80,9 +113,12 @@ class Controller:
             "state": self.session.state.value,
             "provider": self.provider.name,
             "trigger": self.trigger.name,
+            "events": settings.dslrbooth_events_enabled,
             "session_id": self.session.id,
             "down": self._down,
             "paused": self._paused,
+            "block_reason": self._preflight_block or None,
+            "pending_refunds": await self.store.pending_count(),
             "uptime_sec": round(time.time() - self.started_at),
             "today": {"sessions": s_count, "revenue": s_rev, "prints": s_prints},
             "paper_left": await self._paper_left(),
@@ -108,7 +144,10 @@ class Controller:
         await self._reconcile_on_start()
         self.session.new_cycle()
         self._publish()
-        hb = asyncio.create_task(self._heartbeat_loop(), name="heartbeat")
+        bg = [
+            asyncio.create_task(self._heartbeat_loop(), name="heartbeat"),
+            asyncio.create_task(self._pending_ops_loop(), name="pending-refunds"),
+        ]
         try:
             while not self._stop.is_set():
                 try:
@@ -116,10 +155,16 @@ class Controller:
                 except asyncio.CancelledError:
                     raise
                 except Exception:
-                    log.exception("controller tick failed")
+                    log.exception("controller tick failed (state=%s)",
+                                  self.session.state.value)
+                    if self.session.state in _WORK_STATES:
+                        await self._recover_stuck_session("Внутрішня помилка сесії")
                     await self._sleep(2)
         finally:
-            hb.cancel()
+            for t in bg:
+                t.cancel()
+            with contextlib.suppress(Exception):
+                await asyncio.gather(*bg, return_exceptions=True)
         log.info("controller stopped")
 
     # ───────────────────────── loop body ─────────────────────────
@@ -135,6 +180,19 @@ class Controller:
             return
 
         if st == State.IDLE:
+            block = await self._preflight()
+            if block:
+                if not self._down or block != self._preflight_block:
+                    self._down = True
+                    await notify.out_of_service(block)
+                self._preflight_block = block
+                self.session.error = block
+                self.session.state = State.OUT_OF_SERVICE
+                self._publish()
+                await self._sleep(10)
+                self.session.new_cycle()
+                return
+            self._preflight_block = ""
             ok = await self._create_invoice()
             if ok and self._down:
                 self._down = False
@@ -146,6 +204,10 @@ class Controller:
             await self._await_payment()
         elif st == State.PAID:
             await self._run_session()
+        elif st in (State.SHOOTING, State.PRINTING, State.REFUNDING):
+            # we only reach here if _run_session returned/crashed without
+            # finishing — the guest is stranded mid-flow.
+            await self._recover_stuck_session("Сесія зависла")
         elif st == State.DONE:
             await self._sleep(settings.done_duration_sec)
             self.session.new_cycle()
@@ -208,26 +270,175 @@ class Controller:
             except asyncio.TimeoutError:
                 pass
 
+        # TTL expired (or paused/stopped). One last look — a payment may have
+        # landed in the final seconds; don't drop it on the floor.
+        if not self._stop.is_set() and not self._paused:
+            final = payment.PROCESSING
+            with contextlib.suppress(Exception):
+                final = await self.provider.get_status(self.session.invoice_id)
+            if final == payment.SUCCESS:
+                log.info("late payment on %s — accepting", self.session.invoice_id)
+                self.session.state = State.PAID
+                self.session.paid_at = time.time()
+                self.session.phase_deadline = None
+                await self.store.save(self.session)
+                self._publish()
+                return
+            if final not in (payment.FAILURE, payment.EXPIRED, payment.REVERSED):
+                # inconclusive — keep polling this invoice in the background for
+                # a few minutes; if it turns out paid the guest is gone → refund.
+                await self.store.enqueue_refund(
+                    invoice_id=self.session.invoice_id,
+                    session_id=self.session.id,
+                    amount_uah=self.session.amount_uah or settings.price_uah,
+                    reason="інвойс покинуто — стежимо за пізньою оплатою",
+                    kind="watch",
+                )
+
         self.session.new_cycle()
         self._publish()
 
     async def _run_session(self) -> None:
+        inv = self.session.invoice_id
+
+        # idempotency: this invoice already drove a session to a terminal
+        # state (dup PAID after a crash/recovery) — do NOT trigger again.
+        if self._triggered_invoice == inv or await self.store.seen_invoice(
+            inv, exclude_id=self.session.id
+        ):
+            log.warning("invoice %s already handled — skipping duplicate session", inv)
+            self.session.new_cycle()
+            self._publish()
+            return
+
         await notify.payment_received(self.session.amount_uah, self.session.id)
+        self._drain_booth_events()
 
         if not await self._trigger_with_retries():
             await self._refund("Кабінка не відповідає (камера або ПЗ)")
             return
+        self._triggered_invoice = inv   # camera fired — never re-trigger this one
 
-        await self._enter(State.SHOOTING, settings.session_duration_sec)
-        await self._sleep(settings.session_duration_sec)
+        if settings.dslrbooth_events_enabled:
+            await self._shoot_by_events()
+        else:
+            await self._shoot_by_timers()
+
+    # ── event-driven: screens follow real dslrBooth Trigger callbacks ──
+    async def _shoot_by_events(self) -> None:
+        sid = self.session.id
+        n = settings.shots
+        self.session.shot = 0
+        self.session.shoot_phase = "get_ready"
+        await self._enter(State.SHOOTING, None)
+        # a beat to look up, even if session_start is instant
+        await self._sleep(settings.get_ready_sec)
+
+        printing_seen = False
+        while not self._stop.is_set():
+            try:
+                kind, data = await asyncio.wait_for(
+                    self._booth_events.get(), timeout=settings.booth_watchdog_sec
+                )
+            except asyncio.TimeoutError:
+                if self.session.shot > 0:
+                    await notify.send(
+                        f"⚠️ Сесія <code>{sid}</code>: кабінка не надіслала <code>session_end</code> "
+                        f"(зроблено кадрів: {self.session.shot}). Закрито як успішну — перевір друк."
+                    )
+                    break
+                await self._refund("Кабінка не почала зйомку (тайм-аут)")
+                return
+
+            # once printing has started, stray shoot events are ignored
+            if printing_seen and kind in {
+                "shoot_begin", "shot_countdown", "shot_capture", "shot_saved", "processing"
+            }:
+                continue
+
+            if kind == "shoot_begin":
+                self._shoot_phase("get_ready")
+            elif kind == "shot_countdown":
+                self.session.shot = min(n, self.session.shot + 1)
+                secs = data.get("seconds") or settings.shot_countdown_sec
+                self.session.countdown_deadline = time.time() + float(secs)
+                self._shoot_phase("counting")
+            elif kind == "shot_capture":
+                self.session.countdown_deadline = None
+                self._shoot_phase("capture")
+            elif kind == "shot_saved":
+                pass  # progress dots already track self.session.shot
+            elif kind == "processing":
+                self.session.countdown_deadline = None
+                self._shoot_phase("processing")
+            elif kind == "printing":
+                printing_seen = True
+                await self._enter(State.PRINTING, settings.print_duration_sec)
+            elif kind == "booth_error":
+                await self._refund(
+                    f"Кабінка повідомила про помилку: {data.get('detail', '') or 'невідомо'}"
+                )
+                return
+            elif kind == "session_done":
+                if self.session.shot == 0:
+                    await self._refund("Сесія завершилась без жодного кадру")
+                    return
+                if not printing_seen:
+                    await notify.send(
+                        f"⚠️ Сесія <code>{sid}</code> завершилась без події <code>printing</code> "
+                        f"— перевір принтер."
+                    )
+                break
+            # any event refreshes liveness; heartbeat/unknown just loop
+
+        await self._finish_session()
+
+    # ── fallback: no Pro events — drive the same sub-phases on a schedule ──
+    async def _shoot_by_timers(self) -> None:
+        n = settings.shots
+        cd = float(settings.shot_countdown_sec)
+        # pause between shots (camera review/save) — spread the leftover time but
+        # never dwell more than a couple of seconds regardless of the .env value
+        slack = settings.session_duration_sec - settings.get_ready_sec - n * cd
+        gap = min(2.5, max(0.4, slack / n)) if n else 0.4
+
+        self.session.shot = 0
+        self.session.shoot_phase = "get_ready"
+        await self._enter(State.SHOOTING, None)
+        await self._sleep(settings.get_ready_sec)
+
+        for i in range(1, n + 1):
+            if self._stop.is_set():
+                return
+            self.session.shot = i
+            self.session.countdown_deadline = time.time() + cd
+            self._shoot_phase("counting")
+            await self._sleep(cd)
+            self.session.countdown_deadline = None
+            self._shoot_phase("capture")
+            await self._sleep(gap)
+
+        self._shoot_phase("processing")
+        await self._sleep(1.0)
 
         await self._enter(State.PRINTING, settings.print_duration_sec)
         await self._sleep(settings.print_duration_sec)
+        await self._finish_session()
 
+    async def _finish_session(self) -> None:
         self.session.finished_at = time.time()
+        self.session.shoot_phase = ""
+        self.session.countdown_deadline = None
         await self._enter(State.DONE, settings.done_duration_sec)
         await self.store.save(self.session, prints=1)
         await self._after_print()
+
+    def _shoot_phase(self, phase: str) -> None:
+        """Publish a SHOOTING sub-phase change (no DB write — the row stays SHOOTING)."""
+        self.session.state = State.SHOOTING
+        self.session.shoot_phase = phase
+        self.session.phase_deadline = None
+        self._publish()
 
     async def _trigger_with_retries(self) -> bool:
         for attempt in range(1, settings.trigger_retries + 1):
@@ -245,15 +456,25 @@ class Controller:
     async def _refund(self, reason: str) -> None:
         self.session.error = reason
         await self._enter(State.REFUNDING, None)
+        amount = self.session.amount_uah or settings.price_uah
         ok = False
         try:
-            ok = await self.provider.refund(
-                self.session.invoice_id, self.session.amount_uah
-            )
+            ok = await self.provider.refund(self.session.invoice_id, amount)
         except Exception as exc:
             log.error("refund failed: %s", exc)
-        await notify.session_failed(self.session.amount_uah, self.session.id, reason)
+        await notify.session_failed(amount, self.session.id, reason)
         await notify.refund_result(self.session.id, ok)
+
+        if not ok and self.session.invoice_id:
+            # couldn't confirm — hand it to the retry queue so the money still
+            # comes back once the acquirer / network recovers.
+            await self.store.enqueue_refund(
+                invoice_id=self.session.invoice_id,
+                session_id=self.session.id,
+                amount_uah=amount,
+                reason=reason,
+                kind="refund",
+            )
 
         self.session.finished_at = time.time()
         self.session.state = State.REFUNDED
@@ -290,10 +511,17 @@ class Controller:
                 ok = await self.provider.refund(inv, amount)
             except Exception as exc:
                 log.error("reconcile refund failed: %s", exc)
+            if not ok and inv:
+                # internet/acquirer likely still down right after a reboot —
+                # queue it, the retry loop will keep trying.
+                await self.store.enqueue_refund(
+                    invoice_id=inv, session_id=sid, amount_uah=amount,
+                    reason=f"reconcile after restart ({st})", kind="refund",
+                )
             await notify.send(
                 f"♻️ Після перезапуску знайдено незавершену сесію <code>{sid}</code> "
                 f"({st}). Повернення {amount} {settings.currency}: "
-                f"{'успішно' if ok else 'НЕ ВДАЛОСЯ — перевір вручну'}"
+                f"{'успішно' if ok else 'у чергу на повтор'}"
             )
             closed_state = State.REFUNDED
             err = "reconciled after restart"
@@ -303,6 +531,137 @@ class Controller:
             created_at=last["created_at"], finished_at=time.time(), error=err,
         )
         await self.store.save(closed, prints=last.get("prints", 0))
+
+    # ─────────────────── preflight / recovery ───────────────────
+    async def _preflight(self) -> str:
+        """Reasons NOT to sell a session right now (checked before every QR).
+        Empty string = good to go."""
+        left = await self._paper_left()
+        if left is not None and left <= 0:
+            return "Закінчився папір — заміни рулон"
+
+        with contextlib.suppress(Exception):
+            pr = await printer.printer_problem()
+            if pr:
+                return pr
+
+        try:
+            if not await self.trigger.healthy():
+                return "Фотобудка (dslrBooth) не відповідає"
+        except Exception as exc:
+            log.warning("booth health check errored: %s", exc)
+
+        return ""
+
+    async def _recover_stuck_session(self, reason: str) -> None:
+        """The session loop died mid-flow. Refund the guest and get clean."""
+        st = self.session.state.value
+        inv, sid = self.session.invoice_id, self.session.id
+        amount = self.session.amount_uah or settings.price_uah
+        log.error("recovering stuck session %s in %s: %s", sid, st, reason)
+        with contextlib.suppress(Exception):
+            await notify.send(
+                f"🚨 Збій сесії <code>{sid}</code> у стані {st} "
+                f"({reason}). Автовідновлення + повернення коштів."
+            )
+
+        handled = False
+        if inv and self.session.state != State.REFUNDED:
+            try:
+                await self._refund(reason)
+                handled = self.session.state == State.REFUNDED
+            except Exception:
+                log.exception("recovery refund failed")
+        # belt-and-suspenders: if _refund itself blew up (e.g. disk), make sure
+        # the money is still queued for return.
+        if inv and not handled and self.session.state != State.REFUNDED:
+            with contextlib.suppress(Exception):
+                await self.store.enqueue_refund(
+                    invoice_id=inv, session_id=sid, amount_uah=amount,
+                    reason=f"recovery: {reason}", kind="refund",
+                )
+
+        if self.session.state not in (State.REFUNDED, State.REFUNDING):
+            self.session.new_cycle()
+            self._publish()
+
+    async def _pending_ops_loop(self) -> None:
+        """Dead-letter queue: chase every refund we owe until the acquirer
+        confirms 'reversed', and watch abandoned invoices for late payments."""
+        while not self._stop.is_set():
+            try:
+                await self._process_pending()
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                log.exception("pending-refund loop error")
+            try:
+                await asyncio.wait_for(
+                    self._stop.wait(), timeout=settings.pending_ops_interval_sec
+                )
+            except asyncio.TimeoutError:
+                pass
+
+    async def _process_pending(self) -> None:
+        now = time.time()
+        for row in await self.store.due_pending(now):
+            inv = row["invoice_id"]
+            amount = int(row["amount_uah"] or settings.price_uah)
+            attempts = int(row["attempts"] or 0)
+
+            if row["kind"] == "watch":
+                if now - float(row["created_at"]) > settings.watch_ttl_sec:
+                    await self.store.drop_pending(inv)
+                    continue
+                status = payment.PROCESSING
+                with contextlib.suppress(Exception):
+                    status = await self.provider.get_status(inv)
+                if status == payment.SUCCESS:
+                    log.warning("late payment on abandoned invoice %s — auto-refund", inv)
+                    await self.store.update_pending(
+                        inv, kind="refund", attempts=0, next_try=now,
+                        reason="пізня оплата, гість пішов — автоповернення",
+                    )
+                    with contextlib.suppress(Exception):
+                        await notify.send(
+                            f"↩️ Пізня оплата по покинутому інвойсу <code>{inv}</code> "
+                            f"({amount} {settings.currency}) — ставлю на автоповернення."
+                        )
+                elif status in (payment.FAILURE, payment.EXPIRED, payment.REVERSED):
+                    await self.store.drop_pending(inv)
+                else:
+                    await self.store.update_pending(inv, next_try=now + 20)
+                continue
+
+            # kind == "refund"
+            ok = False
+            with contextlib.suppress(Exception):
+                ok = await self.provider.refund(inv, amount)
+            confirmed = ok
+            if ok:
+                with contextlib.suppress(Exception):
+                    confirmed = await self.provider.get_status(inv) in (
+                        payment.REVERSED, payment.PROCESSING
+                    )
+            if confirmed:
+                await self.store.drop_pending(inv)
+                with contextlib.suppress(Exception):
+                    await notify.send(
+                        f"✅ Повернення коштів по <code>{inv}</code> "
+                        f"({amount} {settings.currency}) підтверджено."
+                    )
+                continue
+
+            attempts += 1
+            backoff = min(3600.0, settings.refund_retry_base_sec * (2 ** min(attempts, 8)))
+            await self.store.update_pending(inv, attempts=attempts, next_try=now + backoff)
+            if attempts == settings.refund_max_attempts:
+                with contextlib.suppress(Exception):
+                    await notify.send(
+                        f"❌ Повернення по <code>{inv}</code> ({amount} {settings.currency}) "
+                        f"не вдається {attempts} раз — ПОТРІБНЕ РУЧНЕ ВТРУЧАННЯ. "
+                        f"Продовжую спроби."
+                    )
 
     # ───────────────────────── paper ─────────────────────────
     async def _paper_left(self) -> int | None:

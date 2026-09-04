@@ -98,11 +98,26 @@ class Settings:
         "http://localhost:1500/api/take_photo",
     )
     dslrbooth_api_password: str = _get("DSLRBOOTH_API_PASSWORD")
+    # basic dslrBooth has no feedback — the hotkey trigger checks liveness by
+    # confirming the process (and optionally the foreground window) instead.
+    dslrbooth_proc_names: str = _get("DSLRBOOTH_PROC_NAMES", "dslrBooth.exe,dslrBooth")
+    dslrbooth_require_foreground: bool = _bool("DSLRBOOTH_REQUIRE_FOREGROUND", False)
 
-    # ── Session timing (measure once on the real booth) ─────────
+    # ── dslrBooth Trigger events (Pro): screens follow real events, not timers ──
+    #  Pro → Settings › General › Triggers → URL:
+    #    http://<this-backend>:<PORT>/dslrbooth/event?token=<DSLRBOOTH_EVENT_TOKEN>
+    #  dslrBooth appends &event_type=…&param1=…  on every session event.
+    dslrbooth_events_enabled: bool = _bool("DSLRBOOTH_EVENTS_ENABLED")
+    dslrbooth_event_token: str = _get("DSLRBOOTH_EVENT_TOKEN")
+    booth_watchdog_sec: float = _float("BOOTH_WATCHDOG_SEC", 90)  # no event this long ⇒ refund
+
+    # ── Session timing ─────────────────────────────────────────
+    #  With events on, these are only a safety fallback. With events off
+    #  (basic dslrBooth), they drive the screens — measure once on the real booth.
     session_duration_sec: float = _float("SESSION_DURATION_SEC", 35)
     print_duration_sec: float = _float("PRINT_DURATION_SEC", 25)
     done_duration_sec: float = _float("DONE_DURATION_SEC", 6)
+    get_ready_sec: float = _float("GET_READY_SEC", 2.0)     # "Дивіться в камеру!" hold before 3·2·1
     shot_countdown_sec: int = _int("SHOT_COUNTDOWN_SEC", 3)  # the "3·2·1" before each shot
     trigger_retries: int = _int("TRIGGER_RETRIES", 3)
     trigger_retry_pause_sec: float = _float("TRIGGER_RETRY_PAUSE_SEC", 2.0)
@@ -112,9 +127,17 @@ class Settings:
     telegram_chat_id: str = _get_any(["TELEGRAM_ADMIN_CHAT_ID", "TELEGRAM_CHAT_ID"])
     daily_summary_hour: int = _int("DAILY_SUMMARY_HOUR", 23)
 
-    # ── Consumables (thermal paper) ────────────────────────────
+    # ── Consumables (thermal paper) + printer health ───────────
     paper_capacity: int = _int("PAPER_CAPACITY", 700)   # prints per roll; 0 disables
     paper_warn_prints_left: int = _int("PAPER_WARN_PRINTS_LEFT", 60)
+    printer_check_enabled: bool = _bool("PRINTER_CHECK_ENABLED", True)  # Windows only
+    printer_name: str = _get("PRINTER_NAME")            # empty → the default printer
+
+    # ── Refund resilience (dead-letter queue for money owed) ────
+    watch_ttl_sec: float = _float("WATCH_TTL_SEC", 300)          # poll an abandoned invoice this long
+    refund_retry_base_sec: float = _float("REFUND_RETRY_BASE_SEC", 60)
+    refund_max_attempts: int = _int("REFUND_MAX_ATTEMPTS", 12)
+    pending_ops_interval_sec: float = _float("PENDING_OPS_INTERVAL_SEC", 45)
 
     # ── Fleet heartbeat (optional) ─────────────────────────────
     heartbeat_url: str = _get("HEARTBEAT_URL")
@@ -167,6 +190,9 @@ class Settings:
         w: list[str] = []
         if self.booth_id == "booth-local":
             w.append("BOOTH_ID is default 'booth-local' — set a unique id per booth")
+        if not self.support_phone:
+            w.append("SUPPORT_PHONE is empty — the error screens won't show a "
+                     "contact number for stranded customers")
         if self.payment_provider == "monobank" and not self.bank_token:
             w.append("PAYMENT_PROVIDER=monobank but BANK_TOKEN is empty")
         if self.payment_provider == "mock":
@@ -175,6 +201,9 @@ class Settings:
             w.append("Telegram not configured — owner gets no alerts")
         if self.fake_trigger_ok:
             w.append("FAKE_TRIGGER_OK=1 — the camera will NOT actually fire")
+        if self.dslrbooth_events_enabled and not self.dslrbooth_event_token:
+            w.append("DSLRBOOTH_EVENTS_ENABLED=1 without DSLRBOOTH_EVENT_TOKEN — "
+                     "/dslrbooth/event accepts unauthenticated calls")
         return w
 
 

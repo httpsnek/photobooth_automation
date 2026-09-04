@@ -274,8 +274,14 @@ html, body {
   .badge { transition: none; }
 }
 
-/* morph-icon renders a plain <svg> child; host stays transparent to layout.
-   (the host's inline display is toggled from JS during SHOOTING) */
+/* morph-icon renders a plain <svg> child; display:contents host, so the <svg>
+   itself is the grid item. The number and the icon share one centred cell and
+   cross-fade when SHOOTING toggles `.counting`. */
+#badge svg,
+#badge #countdown-num {
+  grid-area: 1 / 1;
+  transition: opacity .28s ease, transform .28s cubic-bezier(.2, .7, .3, 1);
+}
 #badge svg {
   width: 46%;
   height: 46%;
@@ -284,6 +290,8 @@ html, body {
 }
 /* the checkmark reads better a touch larger */
 #badge.badge--ok svg { width: 58%; height: 58%; }
+/* number in -> icon out */
+#badge.counting svg { opacity: 0; transform: scale(.5); }
 
 /* per-shot countdown number, shown in the badge during SHOOTING */
 #countdown-num {
@@ -293,8 +301,9 @@ html, body {
   color: inherit;
   font-variant-numeric: tabular-nums;
 }
-#countdown-num[hidden],
-#badge:not(.counting) #countdown-num { display: none; }
+#countdown-num[hidden] { display: none; }
+#badge:not(.counting) #countdown-num { opacity: 0; transform: scale(.55); }
+#badge.counting #countdown-num { opacity: 1; transform: none; }
 #countdown-num.pulse { animation: cd-pulse .42s cubic-bezier(.2, .8, .3, 1); }
 @keyframes cd-pulse {
   0%   { transform: scale(.5); opacity: .25; }

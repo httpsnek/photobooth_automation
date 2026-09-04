@@ -48,6 +48,11 @@ uvicorn backend.app:app --reload --port 8000
    - Windows **auto-login** for the kiosk user.
    - **dslrBooth** in the Startup folder, set to fullscreen; assign its
      trigger key and put the same key in `DSLRBOOTH_HOTKEY`.
+   - *(dslrBooth Pro, recommended)* set `DSLRBOOTH_EVENTS_ENABLED=1` +
+     `DSLRBOOTH_EVENT_TOKEN=<random>`, then in dslrBooth **Settings › General ›
+     Triggers** set the URL to
+     `http://localhost:8000/dslrbooth/event?token=<random>`. Now the tablet's
+     screens (and the 3·2·1 countdown) follow the real camera instead of a timer.
    - Give the PC a **static DHCP lease** on the router.
    - On the **Android tablet**: install *Fully Kiosk Browser*, point it at
      `http://<pc-ip>:8000/kiosk`, enable *Start on Boot*, *Screen Always On*,
@@ -73,8 +78,12 @@ list with comments. The essentials:
 | `PRICE_UAH`, `CURRENCY`, `SHOTS` | pricing |
 | `PAYMENT_PROVIDER` | `mock` or `monobank` |
 | `BANK_TOKEN` | Monobank acquiring X-Token (`api.monobank.ua` → Еквайринг) |
-| `DSLRBOOTH_TRIGGER` | `hotkey` (basic) or `rest` (dslrBooth Pro) |
-| `SESSION_DURATION_SEC`, `PRINT_DURATION_SEC` | measured on the real booth |
+| `DSLRBOOTH_TRIGGER` | `hotkey` (basic) or `rest` (dslrBooth Pro) — how we *start* a session |
+| `DSLRBOOTH_EVENTS_ENABLED`, `DSLRBOOTH_EVENT_TOKEN` | dslrBooth Pro Triggers drive the screens by real events, not timers |
+| `DSLRBOOTH_PROC_NAMES`, `DSLRBOOTH_REQUIRE_FOREGROUND` | hotkey-mode liveness: no QR unless dslrBooth is actually running |
+| `SESSION_DURATION_SEC`, `PRINT_DURATION_SEC` | measured on the real booth — used when events are off, or as the watchdog |
+| `PRINTER_CHECK_ENABLED`, `PRINTER_NAME` | Windows: stop selling when the printer is offline / jammed / out of paper |
+| `WATCH_TTL_SEC`, `REFUND_RETRY_BASE_SEC`, `REFUND_MAX_ATTEMPTS` | dead-letter queue — money owed is retried until the acquirer confirms |
 | `TELEGRAM_ALERTS_BOT_TOKEN`, `TELEGRAM_ADMIN_CHAT_ID` | owner alerts |
 | `PAPER_CAPACITY`, `PAPER_WARN_PRINTS_LEFT` | thermal-paper tracking |
 | `ADMIN_TOKEN` | protects `/admin/*` |
@@ -105,6 +114,7 @@ Renamed keys keep working: `MONOBANK_TOKEN`, `TELEGRAM_BOT_TOKEN`,
 | `GET /status` | owner | the same, as a phone-friendly HTML page |
 | `POST /admin/pause` · `/admin/resume` · `/admin/paper-reset` | owner | `?token=<ADMIN_TOKEN>` |
 | `POST /webhook` | Monobank | payment accelerator; signature-checked, poller stays authoritative |
+| `GET/POST /dslrbooth/event` | dslrBooth Pro | Trigger callbacks (`?event_type=…`) — advance the session on real camera events; `?token=<DSLRBOOTH_EVENT_TOKEN>` |
 
 ---
 
@@ -140,7 +150,9 @@ backend/
   controller.py     the session state machine (single async task)
   state.py          FSM enum, SQLite store, SSE broadcaster
   payment.py        PaymentProvider: mock | monobank (invoice / status / refund / webhook sig)
-  dslrbooth.py      BoothTrigger: hotkey | rest | fake
+  dslrbooth.py      BoothTrigger: hotkey | rest | fake  + process-liveness check
+  booth_events.py   normalises dslrBooth Pro "Trigger" callbacks -> FSM events
+  printer.py        Windows print-queue health (jam / offline / paper-out)
   notify.py         Telegram alerts (booth-tagged)
   config.py         all of .env, one place
   logging_setup.py  console + rotating file, booth-tagged
@@ -150,19 +162,42 @@ frontend/
   static/js/kiosk.js      SSE listener + screen renderer + demo modes
   static/vendor/morphicons.js   animated icon web component (bundled, MIT)
 setup.ps1 / setup.bat   one-shot Windows installer
-run.bat                 launcher with crash-restart loop
+run.bat                 launcher with crash-restart loop (also starts the watchdog)
+watchdog.py / .bat      external watchdog — restarts a wedged backend, escalates to PC reboot
 update.bat              git pull + deps
 ```
+
+### Two-layer recovery
+
+1. **In-process** — `controller.run()` catches any exception in the session
+   loop and `_recover_stuck_session()` refunds + resets. Handles ~everything
+   while the asyncio loop is still alive.
+2. **External** — `watchdog.py` polls `/health` every `WATCHDOG_INTERVAL_SEC`.
+   No answer `WATCHDOG_FAIL_LIMIT`× in a row, or the same session frozen in a
+   non-`OUT_OF_SERVICE` state past `WATCHDOG_STUCK_SEC` → it kills the backend
+   (`run.bat` restarts it). `WATCHDOG_REBOOT_AFTER_KILLS` restarts in the
+   window → `shutdown /r`. Runs as its own Scheduled Task **and** from `run.bat`
+   (a pidfile lock keeps it single); every action is logged to
+   `logs/watchdog.log` and pinged to Telegram.
 
 ---
 
 ## Status / TODO
 
-Done and verified on mock: full session flow, trigger-failure → retry →
-auto-refund, OUT_OF_SERVICE + recovery, restart reconciliation, per-booth
+Done and verified on mock: full session flow (timer **and** event-driven),
+trigger-failure → retry → auto-refund, booth-event watchdog → refund,
+**stuck-session self-recovery** (any crash mid-flow → refund + reset),
+**preflight gate** (no QR unless dslrBooth is up, paper > 0, printer OK),
+**late-payment capture** + **refund dead-letter queue** (money owed is never
+dropped — retried with backoff until `reversed`), idempotency guard against a
+duplicated trigger, OUT_OF_SERVICE + recovery, restart reconciliation, per-booth
 DB/logs, paper counter + alert, heartbeat, admin pause/resume, SSE reconnect.
 
 Needs the real thing:
 - **Monobank** — live test with a real `BANK_TOKEN` (create / poll / refund / webhook signature).
-- **dslrBooth** — `hotkey` trigger on the actual Windows PC + camera; measure the timings.
+- **dslrBooth** — `hotkey` (or `rest`) trigger on the actual Windows PC + camera;
+  with Pro, wire the Triggers URL and confirm the event names; measure the
+  fallback timings either way.
+- **Printer** — confirm the photo printer's Windows `PrinterStatus` strings for
+  offline / out-of-paper (drivers vary) and tune `backend/printer.py` if needed.
 - **On-site** — auto-login, dslrBooth autostart, Fully Kiosk, static IP, UPS.
