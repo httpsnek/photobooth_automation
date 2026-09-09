@@ -144,16 +144,16 @@ html, body {
 }
 
 /* the awaiting screen is a full stack, not a single hero — centre the stack
-   between the logo and the bottom edge */
+   between the logo and the bottom edge:  price · headline · BIG QR · hint */
 #screen:has(#awaiting:not([hidden])) {
   justify-content: center;
   padding: min(16vh, 112px) 9vw min(9vh, 68px);
   gap: 0;
 }
 #awaiting {
-  flex-direction: column-reverse;      /* text on top, QR below */
+  flex-direction: column;
   align-items: center;
-  gap: clamp(20px, 3.6vh, 38px);
+  gap: clamp(18px, 3.4vh, 36px);
 }
 .await-text {
   display: flex;
@@ -225,8 +225,8 @@ html, body {
 }
 .qr-frame img {
   display: block;
-  width: calc(var(--hero) * 0.84);
-  height: calc(var(--hero) * 0.84);
+  width: calc(var(--hero) * 0.92);
+  height: calc(var(--hero) * 0.92);
   background: #fff;
   border-radius: clamp(15px, 3.4vw, 26px);
   padding: clamp(7px, 1.8vw, 13px);
@@ -236,11 +236,11 @@ html, body {
 /* staggered rise-in for the awaiting screen (replaces the video's pop-in) */
 #awaiting > * { animation: rise .5s cubic-bezier(.2, .7, .3, 1) both; }
 #awaiting .await-text { animation-delay: 0s; }
-#awaiting .qr-frame  { animation-delay: .08s; }
+#awaiting .qr-frame   { animation-delay: .1s; }
+#awaiting .foot       { animation-delay: .18s; }
 #awaiting .await-text > * { animation: rise .45s cubic-bezier(.2, .7, .3, 1) both; }
 #awaiting .await-text > *:nth-child(1) { animation-delay: .02s; }
 #awaiting .await-text > *:nth-child(2) { animation-delay: .09s; }
-#awaiting .await-text > *:nth-child(3) { animation-delay: .16s; }
 @keyframes rise {
   from { opacity: 0; transform: translateY(14px); }
   to   { opacity: 1; transform: none; }
@@ -383,8 +383,8 @@ html, body {
     --fs-small:    clamp(0.95rem, 0.6vw + 0.7rem, 1.3rem);
   }
 
-  .brand { height: min(20vh, 96px); padding-top: min(3vh, 20px); }
-  .logo  { height: min(11vh, 60px); }
+  .brand { height: min(22vh, 108px); padding-top: min(3vh, 20px); }
+  .logo  { height: min(14vh, 76px); }
 
   /* status screens: [ badge/loader ]  [ copy ] side by side */
   #screen {
@@ -401,30 +401,40 @@ html, body {
   .support { text-align: left; }
   .shots-progress { margin-top: clamp(8px, 2vh, 18px); }
 
-  /* AWAITING: QR on the left, text on the right */
+  /* AWAITING: centred vertical stack with a BIG QR in the middle
+     (logo · price · headline · QR · hint) — client request */
   #screen:has(#awaiting:not([hidden])) {
-    padding: min(20vh, 104px) 6vw min(7vh, 44px);
+    flex-direction: column;
+    justify-content: center;
+    padding: min(19vh, 128px) 6vw min(4vh, 34px);
   }
   #awaiting {
-    flex-direction: row;
+    flex-direction: column;
     align-items: center;
     justify-content: center;
-    gap: clamp(34px, 5vw, 86px);
+    gap: clamp(12px, 2.2vh, 26px);
     width: auto;
-    max-width: 94vw;
+    max-width: none;
   }
-  .await-text {
-    align-items: flex-start;
-    text-align: left;
-    max-width: 48vw;
+  #awaiting .await-text {
+    align-items: center;
+    text-align: center;
+    max-width: none;
+    gap: clamp(4px, 1.1vh, 12px);
   }
-  #awaiting .foot br { display: none; }
-  #awaiting .headline { white-space: nowrap; }   /* break only at the <br> */
+  #awaiting .headline { text-align: center; white-space: normal; }
+  #awaiting .foot { text-align: center; }
 
-  .qr-frame img {
-    width: calc(var(--hero) * 0.92);
-    height: calc(var(--hero) * 0.92);
+  #awaiting .qr-frame img {
+    width: min(44vh, 44vw);
+    height: min(44vh, 44vw);
   }
+}
+
+/* very short landscape — keep the QR from pushing the hint off-screen */
+@media (orientation: landscape) and (max-height: 640px) {
+  #screen:has(#awaiting:not([hidden])) { padding-top: min(16vh, 104px); }
+  #awaiting .qr-frame img { width: min(40vh, 42vw); height: min(40vh, 42vw); }
 }
 
 /* very short landscape (small 16:9 tablets) — tighten everything */
