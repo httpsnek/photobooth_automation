@@ -84,6 +84,8 @@ async def kiosk(request: Request) -> HTMLResponse:
             "version": VERSION,
             "booth_name": settings.booth_name,
             "support_phone": settings.support_phone,
+            "support_tg_url": settings.support_tg_url,
+            "support_tg_handle": settings.support_tg_handle,
             "price": settings.price_uah,
             "currency": settings.currency,
             "shots": settings.shots,

@@ -90,7 +90,7 @@ list with comments. The essentials:
 |---|---|
 | `BOOTH_ID` | unique id — goes into the DB filename, every log line, and each bank invoice |
 | `BOOTH_NAME` | shown on screen, in the payment description, and in alerts |
-| `SUPPORT_PHONE` | printed on the error screens |
+| `SUPPORT_PHONE` / `SUPPORT_TELEGRAM` | error-screen contact — phone as text, Telegram @handle / link as a scannable QR |
 | `PRICE_UAH`, `CURRENCY`, `SHOTS` | pricing |
 | `PAYMENT_PROVIDER` | `mock` or `monobank` |
 | `BANK_TOKEN` | Monobank acquiring X-Token (`api.monobank.ua` → Еквайринг) |

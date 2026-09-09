@@ -68,7 +68,8 @@ if (-not (Test-Path ".env")) {
 
   Ask "BOOTH_ID"                  "Booth id (unique, e.g. booth-002)"          "booth-001"
   Ask "BOOTH_NAME"               "Booth name / location"                      "InstaBOX"
-  Ask "SUPPORT_PHONE"            "Support phone (shown on error screens)"     ""
+  Ask "SUPPORT_PHONE"            "Support phone, blank if none"               ""
+  Ask "SUPPORT_TELEGRAM"        "Support Telegram @handle or t.me link"      ""
   Ask "PRICE_UAH"               "Price per session, UAH"                     "150"
   Ask "PAYMENT_PROVIDER"        "Payment provider (mock | monobank)"         "mock"
   Ask "BANK_TOKEN"              "Monobank acquiring X-Token (blank for now)" ""
@@ -82,8 +83,8 @@ if (-not (Test-Path ".env")) {
 
 # nag about anything important that's still blank
 $envText = Get-Content ".env" -Raw
-if ($envText -notmatch '(?m)^\s*SUPPORT_PHONE\s*=\s*\S') {
-  Write-Host "Warning: SUPPORT_PHONE is empty - stranded customers won't see a phone number on the error screen." -ForegroundColor Yellow
+if (($envText -notmatch '(?m)^\s*SUPPORT_PHONE\s*=\s*\S') -and ($envText -notmatch '(?m)^\s*SUPPORT_TELEGRAM\s*=\s*\S')) {
+  Write-Host "Warning: no SUPPORT_PHONE / SUPPORT_TELEGRAM - stranded customers have nowhere to turn on the error screen." -ForegroundColor Yellow
 }
 if ($envText -match '(?m)^\s*PAYMENT_PROVIDER\s*=\s*monobank' -and $envText -notmatch '(?m)^\s*BANK_TOKEN\s*=\s*\S') {
   Write-Host "Warning: PAYMENT_PROVIDER=monobank but BANK_TOKEN is empty." -ForegroundColor Yellow

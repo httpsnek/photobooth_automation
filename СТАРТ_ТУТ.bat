@@ -49,8 +49,9 @@ echo   Заповніть / перевірте як мінімум:
 echo     BOOTH_ID       - унікальний id точки, напр. kiosk_mall_01
 echo     BOOTH_NAME     - назва точки
 echo     PRICE_UAH      - ціна фотосесії
-echo     PRINTER_NAME   - точна назва принтера Windows, порожньо = типовий
-echo     SUPPORT_PHONE  - телефон підтримки
+echo     PRINTER_NAME     - точна назва принтера Windows, порожньо = типовий
+echo     SUPPORT_TELEGRAM - @юзернейм або t.me/... підтримки (QR на екрані помилки)
+echo     PAPER_CAPACITY   - скільки відбитків з рулону
 echo     BANK_TOKEN, TELEGRAM_ALERTS_BOT_TOKEN, TELEGRAM_ADMIN_CHAT_ID
 echo.
 echo   Після правок: збережіть файл Ctrl+S і закрийте Блокнот.

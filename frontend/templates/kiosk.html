@@ -18,7 +18,9 @@
   data-shots="{{ shots }}"
   data-session-duration="{{ session_duration }}"
   data-shot-countdown="{{ shot_countdown }}"
-  data-support-phone="{{ support_phone }}">
+  data-support-phone="{{ support_phone }}"
+  data-support-tg-url="{{ support_tg_url }}"
+  data-support-tg-handle="{{ support_tg_handle }}">
 
   <!-- ── Video layer: the client's branded animation, shown for AWAITING_PAYMENT
        and PAID when a video file is configured. The live QR is a real element
@@ -57,6 +59,9 @@
       <p id="subtext" class="muted" hidden></p>
       <div id="shots-progress" class="shots-progress" hidden></div>
       <p id="support" class="support" hidden></p>
+      <div id="support-qr" class="support-qr" hidden>
+        <img id="support-qr-img" alt="QR підтримки" />
+      </div>
     </div>
 
     <!-- AWAITING_PAYMENT — centred vertical stack:

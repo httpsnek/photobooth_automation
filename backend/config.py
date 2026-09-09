@@ -70,6 +70,9 @@ class Settings:
     booth_id: str = _get("BOOTH_ID", "booth-local")
     booth_name: str = _get("BOOTH_NAME", "InstaBOX")
     support_phone: str = _get("SUPPORT_PHONE")
+    # a Telegram handle / t.me link — shown as a scannable QR on the error
+    # screens (a stranded guest can't tap text on a kiosk). Either or both.
+    support_telegram: str = _get_any(["SUPPORT_TELEGRAM", "SUPPORT_TG"])
 
     # ── Server ──────────────────────────────────────────────────
     host: str = _get("HOST", "0.0.0.0")
@@ -160,7 +163,28 @@ class Settings:
     fake_trigger_ok: bool = _bool("FAKE_TRIGGER_OK")
     mock_fail: bool = _bool("MOCK_FAIL")
 
-    # ── Derived paths ─────────────────────────────────────────
+    # ── Derived ───────────────────────────────────────────────
+    @property
+    def support_tg_url(self) -> str:
+        """Full https://t.me/… link for the support QR, or ''."""
+        v = self.support_telegram.strip().lstrip("@")
+        if not v:
+            return ""
+        if v.startswith(("http://", "https://")):
+            return v
+        if v.startswith("t.me/"):
+            return "https://" + v
+        return "https://t.me/" + v
+
+    @property
+    def support_tg_handle(self) -> str:
+        """@handle for on-screen text, or ''."""
+        v = self.support_telegram.strip()
+        if not v:
+            return ""
+        v = v.rsplit("/", 1)[-1].lstrip("@")
+        return "@" + v if v else ""
+
     @property
     def _root(self) -> Path:
         d = Path(self.data_dir)
@@ -190,9 +214,9 @@ class Settings:
         w: list[str] = []
         if self.booth_id == "booth-local":
             w.append("BOOTH_ID is default 'booth-local' — set a unique id per booth")
-        if not self.support_phone:
-            w.append("SUPPORT_PHONE is empty — the error screens won't show a "
-                     "contact number for stranded customers")
+        if not self.support_phone and not self.support_telegram:
+            w.append("no support contact (SUPPORT_PHONE / SUPPORT_TELEGRAM) — "
+                     "the error screens give a stranded customer nowhere to turn")
         if self.payment_provider == "monobank" and not self.bank_token:
             w.append("PAYMENT_PROVIDER=monobank but BANK_TOKEN is empty")
         if self.payment_provider == "mock":

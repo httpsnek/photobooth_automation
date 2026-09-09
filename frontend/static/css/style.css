@@ -203,6 +203,23 @@ html, body {
 }
 .support[hidden] { display: none; }
 
+/* support QR (error screens) — a stranded guest scans it to reach us */
+.support-qr {
+  margin-top: clamp(8px, 1.6vh, 16px);
+  background: #fff;
+  border: 2px solid var(--pink-soft);
+  border-radius: clamp(10px, 2vw, 16px);
+  padding: clamp(6px, 1.4vw, 12px);
+  line-height: 0;
+}
+.support-qr[hidden] { display: none; }
+.support-qr img {
+  display: block;
+  width: calc(var(--hero) * 0.6);
+  height: calc(var(--hero) * 0.6);
+  image-rendering: pixelated;
+}
+
 /* ── pricing row (html fallback only) ───────────────────── */
 .pricing {
   display: flex;

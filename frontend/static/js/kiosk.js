@@ -18,6 +18,8 @@
     ? SHOTS * (SHOT_COUNTDOWN + 1)
     : (parseFloat(body.dataset.sessionDuration) || 30);
   var SUPPORT_PHONE = (body.dataset.supportPhone || "").trim();
+  var SUPPORT_TG_URL = (body.dataset.supportTgUrl || "").trim();
+  var SUPPORT_TG_HANDLE = (body.dataset.supportTgHandle || "").trim();
 
   // ── Lucide icon data (IconNode). Morphed by <morph-icon>. ──
   var ICON = {
@@ -53,6 +55,8 @@
   var headlineEl = document.getElementById("headline");
   var subtextEl = document.getElementById("subtext");
   var supportEl = document.getElementById("support");
+  var supportQr = document.getElementById("support-qr");
+  var supportQrImg = document.getElementById("support-qr-img");
   var shotsProgress = document.getElementById("shots-progress");
   var countdownNum = document.getElementById("countdown-num");
   var flashEl = document.getElementById("flash");
@@ -201,11 +205,22 @@
     if (changed && cfg.headline) playEnter(copy);
 
     if (supportEl) {
-      if (cfg.support && SUPPORT_PHONE) {
+      if (cfg.support && SUPPORT_TG_URL) {
+        // stranded guest can't tap text on a kiosk — give them a QR to scan
+        supportEl.textContent = "Питання? Наведіть камеру на код"
+          + (SUPPORT_TG_HANDLE ? "  ·  " + SUPPORT_TG_HANDLE : "");
+        supportEl.hidden = false;
+        if (supportQrImg && !supportQrImg.getAttribute("src")) {
+          supportQrImg.src = "/qr?text=" + encodeURIComponent(SUPPORT_TG_URL);
+        }
+        if (supportQr) supportQr.hidden = false;
+      } else if (cfg.support && SUPPORT_PHONE) {
         supportEl.textContent = (cfg.retry ? "Або зателефонуйте: " : "Підтримка: ") + SUPPORT_PHONE;
         supportEl.hidden = false;
+        if (supportQr) supportQr.hidden = true;
       } else {
         supportEl.hidden = true;
+        if (supportQr) supportQr.hidden = true;
       }
     }
 
