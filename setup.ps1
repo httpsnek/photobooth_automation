@@ -1,5 +1,5 @@
 <#
-  InstaBOX kiosk — one-shot installer for a new booth PC (Windows).
+  InstaBOX kiosk - one-shot installer for a new booth PC (Windows).
 
   Run from an elevated PowerShell in the project folder:
       powershell -ExecutionPolicy Bypass -File setup.ps1
@@ -17,7 +17,7 @@ Set-Location -Path $PSScriptRoot
 
 function Section($t) { Write-Host "`n=== $t ===" -ForegroundColor Cyan }
 
-# ── 1. environment checks ───────────────────────────────────────
+# -- 1. environment checks ---------------------------------------
 Section "Checking environment"
 
 $py = Get-Command python -ErrorAction SilentlyContinue
@@ -41,7 +41,7 @@ $ip = (Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue |
        Where-Object { $_.IPAddress -notlike "169.*" -and $_.IPAddress -ne "127.0.0.1" } |
        Select-Object -First 1).IPAddress
 
-# ── 2. venv + deps ──────────────────────────────────────────────
+# -- 2. venv + deps ----------------------------------------------
 Section "Python environment"
 if (-not (Test-Path ".venv\Scripts\python.exe")) {
   & $py.Source -m venv .venv
@@ -50,7 +50,7 @@ if (-not (Test-Path ".venv\Scripts\python.exe")) {
 & ".venv\Scripts\python.exe" -m pip install -r requirements.txt --quiet
 Write-Host "Dependencies installed."
 
-# ── 3. .env ─────────────────────────────────────────────────────
+# -- 3. .env -----------------------------------------------------
 Section "Booth configuration (.env)"
 if (-not (Test-Path ".env")) {
   Copy-Item ".env.example" ".env"
@@ -77,19 +77,19 @@ if (-not (Test-Path ".env")) {
   Ask "DSLRBOOTH_HOTKEY"        "dslrBooth trigger key"                      "space"
   Ask "ADMIN_TOKEN"             "Admin token for /admin (blank to skip)"     ([guid]::NewGuid().ToString('N').Substring(0,12))
 } else {
-  Write-Host ".env already exists — leaving it untouched."
+  Write-Host ".env already exists - leaving it untouched."
 }
 
 # nag about anything important that's still blank
 $envText = Get-Content ".env" -Raw
 if ($envText -notmatch '(?m)^\s*SUPPORT_PHONE\s*=\s*\S') {
-  Write-Host "Warning: SUPPORT_PHONE is empty — stranded customers won't see a phone number on the error screen." -ForegroundColor Yellow
+  Write-Host "Warning: SUPPORT_PHONE is empty - stranded customers won't see a phone number on the error screen." -ForegroundColor Yellow
 }
 if ($envText -match '(?m)^\s*PAYMENT_PROVIDER\s*=\s*monobank' -and $envText -notmatch '(?m)^\s*BANK_TOKEN\s*=\s*\S') {
   Write-Host "Warning: PAYMENT_PROVIDER=monobank but BANK_TOKEN is empty." -ForegroundColor Yellow
 }
 
-# ── 4. autostart via Scheduled Task ─────────────────────────────
+# -- 4. autostart via Scheduled Task -----------------------------
 Section "Autostart"
 $boothId = (Select-String -Path ".env" -Pattern '^\s*BOOTH_ID\s*=\s*(.+)$').Matches[0].Groups[1].Value.Trim()
 $taskName = "InstaBOX-$boothId"
@@ -108,7 +108,7 @@ Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Se
   -RunLevel Highest -Force | Out-Null
 Write-Host "Scheduled task '$taskName' registered (starts at logon, auto-restarts)."
 
-# external watchdog — restarts the backend if it wedges (run.bat also starts it;
+# external watchdog - restarts the backend if it wedges (run.bat also starts it;
 # a pidfile lock keeps it single). Own task so it survives even if run.bat is killed.
 $wdName = "InstaBOX-watchdog-$boothId"
 $wdPy   = Join-Path $PSScriptRoot "watchdog.py"
@@ -123,14 +123,14 @@ if ((Test-Path $wdPy) -and (Test-Path $venvPy)) {
   Write-Host "Scheduled task '$wdName' registered (external process watchdog)."
 }
 
-# ── 5. firewall — let the tablet reach the backend ─────────────
+# -- 5. firewall - let the tablet reach the backend -------------
 Section "Firewall"
-netsh advfirewall firewall delete rule name="InstaBOX $port" >$null 2>&1
-netsh advfirewall firewall add rule name="InstaBOX $port" dir=in action=allow `
-  protocol=TCP localport=$port profile=any | Out-Null
-Write-Host "Inbound TCP $port allowed (so the tablet can open the kiosk)."
+$fwName = "InstaBOX-$port"
+netsh advfirewall firewall delete rule "name=$fwName" >$null 2>&1
+netsh advfirewall firewall add rule "name=$fwName" dir=in action=allow protocol=TCP "localport=$port" profile=any | Out-Null
+Write-Host "Inbound TCP $port allowed as rule '$fwName' (so the tablet can open the kiosk)."
 
-# ── 6. power — a kiosk PC must never sleep or suspend the camera ─
+# -- 6. power - a kiosk PC must never sleep or suspend the camera -
 Section "Power settings"
 try {
   powercfg /change standby-timeout-ac 0
@@ -139,16 +139,16 @@ try {
   powercfg /change hibernate-timeout-dc 0
   powercfg /change monitor-timeout-ac 0
   powercfg /change monitor-timeout-dc 0
-  # USB selective suspend OFF (both power schemes) — keeps the camera stable
+  # USB selective suspend OFF (both power schemes) - keeps the camera stable
   powercfg /setacvalueindex SCHEME_CURRENT 2a737441-1930-4402-8d77-b2bebba308a3 48e6b7a6-50f5-4782-a5d4-53bb8f07e226 0
   powercfg /setdcvalueindex SCHEME_CURRENT 2a737441-1930-4402-8d77-b2bebba308a3 48e6b7a6-50f5-4782-a5d4-53bb8f07e226 0
   powercfg /setactive SCHEME_CURRENT
   Write-Host "Sleep / hibernate / monitor-off / USB-selective-suspend disabled."
 } catch {
-  Write-Host "Could not change power settings automatically — do it in Control Panel > Power Options." -ForegroundColor Yellow
+  Write-Host "Could not change power settings automatically - do it in Control Panel > Power Options." -ForegroundColor Yellow
 }
 
-# ── done ───────────────────────────────────────────────────────
+# -- done -------------------------------------------------------
 Section "Done"
 Write-Host "Start now:   schtasks /Run /TN $taskName"
 if ((Test-Path $wdPy) -and (Test-Path $venvPy)) { Write-Host "             schtasks /Run /TN $wdName" }
@@ -157,7 +157,7 @@ if ($ip) { Write-Host "For the tablet (Fully Kiosk):  http://$ip`:$port/kiosk" -
 Write-Host "Owner status page:  http://localhost:$port/status"
 Write-Host ""
 Write-Host "Still MANUAL (see DEPLOY.md):" -ForegroundColor Yellow
-Write-Host "  * Windows auto-login (netplwiz) — required, task runs -AtLogOn" -ForegroundColor Yellow
+Write-Host "  * Windows auto-login (netplwiz) - required, task runs -AtLogOn" -ForegroundColor Yellow
 Write-Host "  * dslrBooth: fullscreen autostart (shell:startup), trigger key, print-only" -ForegroundColor Yellow
 Write-Host "  * pause Windows Update active hours / defer restarts" -ForegroundColor Yellow
 Write-Host "  * static DHCP lease for this PC on the router" -ForegroundColor Yellow

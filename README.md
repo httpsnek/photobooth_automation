@@ -37,9 +37,21 @@ uvicorn backend.app:app --reload --port 8000
 
 ## Deploy a booth (Windows)
 
-> **On-site: follow [`DEPLOY_CHECKLIST.md`](DEPLOY_CHECKLIST.md)** — a tick-box
+**Fast path — customer / a fresh booth:** `make_release.bat` builds a clean
+`InstaBOX_release.zip` (source + scripts + docs, no `.git`/`.venv`/`.env`/logs).
+On the booth PC: unzip it anywhere and run **`СТАРТ_ТУТ.bat` as administrator**.
+It self-elevates via UAC, creates `.env` and opens it in Notepad for you to fill
+(`BOOTH_ID`, `PRINTER_NAME`, `PRICE_UAH`, tokens…), then runs `setup.ps1`
+(firewall rule for :8000, sleep/USB-suspend off, the two Scheduled Tasks) and
+starts the kiosk. Manual Windows steps that remain (auto-login, dslrBooth
+autostart, static IP, Fully Kiosk) are printed at the end and listed in
+[`DEPLOY_CHECKLIST.md`](DEPLOY_CHECKLIST.md).
+
+> **On-site verification: [`DEPLOY_CHECKLIST.md`](DEPLOY_CHECKLIST.md)** — a tick-box
 > launch checklist (`.env`, Windows, dslrBooth, tablet, 8 field-test scenarios).
 > [`DEPLOY.md`](DEPLOY.md) is the same in ordered "how-to" form.
+
+### Manual clone (developer)
 
 1. `git clone` the repo onto the booth PC.
 2. Right-click **`setup.bat` → Run as administrator**. It:
@@ -165,9 +177,12 @@ frontend/
   static/css/style.css   light theme, brand pink, Montserrat (bundled)
   static/js/kiosk.js      SSE listener + screen renderer + demo modes
   static/vendor/morphicons.js   animated icon web component (bundled, MIT)
-setup.ps1 / setup.bat   one-shot Windows installer
+СТАРТ_ТУТ.bat           customer entry point — self-elevates, .env wizard, setup, start
+make_release.py / .bat  build a clean InstaBOX_release.zip for handover
+setup.ps1 / setup.bat   Windows installer — venv, firewall, power, Scheduled Tasks
 run.bat                 launcher with crash-restart loop (also starts the watchdog)
 watchdog.py / .bat      external watchdog — restarts a wedged backend, escalates to PC reboot
+check.bat               pre-flight self-check (backend.selfcheck)
 update.bat              git pull + deps
 ```
 

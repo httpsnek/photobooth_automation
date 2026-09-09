@@ -1,6 +1,7 @@
 .env
 .env.*
 !.env.example
+InstaBOX_release.zip
 *.db
 *.db-*
 data/
