@@ -123,6 +123,31 @@ if ((Test-Path $wdPy) -and (Test-Path $venvPy)) {
   Write-Host "Scheduled task '$wdName' registered (external process watchdog)."
 }
 
+# ── 5. firewall — let the tablet reach the backend ─────────────
+Section "Firewall"
+netsh advfirewall firewall delete rule name="InstaBOX $port" >$null 2>&1
+netsh advfirewall firewall add rule name="InstaBOX $port" dir=in action=allow `
+  protocol=TCP localport=$port profile=any | Out-Null
+Write-Host "Inbound TCP $port allowed (so the tablet can open the kiosk)."
+
+# ── 6. power — a kiosk PC must never sleep or suspend the camera ─
+Section "Power settings"
+try {
+  powercfg /change standby-timeout-ac 0
+  powercfg /change standby-timeout-dc 0
+  powercfg /change hibernate-timeout-ac 0
+  powercfg /change hibernate-timeout-dc 0
+  powercfg /change monitor-timeout-ac 0
+  powercfg /change monitor-timeout-dc 0
+  # USB selective suspend OFF (both power schemes) — keeps the camera stable
+  powercfg /setacvalueindex SCHEME_CURRENT 2a737441-1930-4402-8d77-b2bebba308a3 48e6b7a6-50f5-4782-a5d4-53bb8f07e226 0
+  powercfg /setdcvalueindex SCHEME_CURRENT 2a737441-1930-4402-8d77-b2bebba308a3 48e6b7a6-50f5-4782-a5d4-53bb8f07e226 0
+  powercfg /setactive SCHEME_CURRENT
+  Write-Host "Sleep / hibernate / monitor-off / USB-selective-suspend disabled."
+} catch {
+  Write-Host "Could not change power settings automatically — do it in Control Panel > Power Options." -ForegroundColor Yellow
+}
+
 # ── done ───────────────────────────────────────────────────────
 Section "Done"
 Write-Host "Start now:   schtasks /Run /TN $taskName"
@@ -131,5 +156,9 @@ Write-Host "Kiosk URL:   http://localhost:$port/kiosk"
 if ($ip) { Write-Host "For the tablet (Fully Kiosk):  http://$ip`:$port/kiosk" -ForegroundColor Green }
 Write-Host "Owner status page:  http://localhost:$port/status"
 Write-Host ""
-Write-Host "Next: set the PC to auto-login, put dslrBooth in fullscreen autostart," -ForegroundColor Yellow
-Write-Host "      give the PC a static DHCP lease, and point Fully Kiosk at the URL above." -ForegroundColor Yellow
+Write-Host "Still MANUAL (see DEPLOY.md):" -ForegroundColor Yellow
+Write-Host "  * Windows auto-login (netplwiz) — required, task runs -AtLogOn" -ForegroundColor Yellow
+Write-Host "  * dslrBooth: fullscreen autostart (shell:startup), trigger key, print-only" -ForegroundColor Yellow
+Write-Host "  * pause Windows Update active hours / defer restarts" -ForegroundColor Yellow
+Write-Host "  * static DHCP lease for this PC on the router" -ForegroundColor Yellow
+Write-Host "  * Fully Kiosk on the tablet -> the URL above" -ForegroundColor Yellow
