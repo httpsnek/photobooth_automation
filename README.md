@@ -37,6 +37,10 @@ uvicorn backend.app:app --reload --port 8000
 
 ## Deploy a booth (Windows)
 
+> **On-site: follow [`DEPLOY_CHECKLIST.md`](DEPLOY_CHECKLIST.md)** — a tick-box
+> launch checklist (`.env`, Windows, dslrBooth, tablet, 8 field-test scenarios).
+> [`DEPLOY.md`](DEPLOY.md) is the same in ordered "how-to" form.
+
 1. `git clone` the repo onto the booth PC.
 2. Right-click **`setup.bat` → Run as administrator**. It:
    - checks Python / the port,
