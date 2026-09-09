@@ -67,8 +67,14 @@ async def check_dslrbooth() -> None:
         try:
             import pyautogui  # noqa: F401
             line(OK, "dslrbooth", f"hotkey '{settings.dslrbooth_hotkey}' (pyautogui ok)")
-        except Exception as exc:
-            line(FAIL, "dslrbooth", f"pyautogui missing: {exc}")
+        except Exception:
+            if sys.platform != "win32":
+                line(WARN, "dslrbooth",
+                     "pyautogui not installed — expected off-Windows; it is a "
+                     "Windows-only dep and installs on the booth PC")
+            else:
+                line(FAIL, "dslrbooth",
+                     "pyautogui missing — run: .venv\\Scripts\\pip install pyautogui")
 
 
 async def check_telegram() -> None:
