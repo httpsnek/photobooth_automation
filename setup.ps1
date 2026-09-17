@@ -124,7 +124,28 @@ if ((Test-Path $wdPy) -and (Test-Path $venvPy)) {
   Write-Host "Scheduled task '$wdName' registered (external process watchdog)."
 }
 
-# -- 5. firewall - let the tablet reach the backend -------------
+# kiosk browser - Chrome owns the touch screen except during the shoot, when
+# the backend raises dslrBooth for its own live view / countdown / retake.
+$kioskBat = Join-Path $PSScriptRoot "start_kiosk.bat"
+if (Test-Path $kioskBat) {
+  try {
+    $startup = [Environment]::GetFolderPath("Startup")
+    $lnk = Join-Path $startup "InstaBOX Kiosk.lnk"
+    $ws = New-Object -ComObject WScript.Shell
+    $sc = $ws.CreateShortcut($lnk)
+    $sc.TargetPath = $kioskBat
+    $sc.WorkingDirectory = $PSScriptRoot
+    $sc.WindowStyle = 7
+    $sc.Save()
+    Write-Host "Kiosk browser starts at logon (shortcut: $lnk)."
+    Write-Host "  NOTE: that is the CURRENT user's Startup folder. If the booth" -ForegroundColor Yellow
+    Write-Host "  auto-logs-in as a different user, copy the shortcut there." -ForegroundColor Yellow
+  } catch {
+    Write-Host "Could not create the kiosk shortcut - add start_kiosk.bat to shell:startup by hand." -ForegroundColor Yellow
+  }
+}
+
+# -- 5. firewall - owner's phone can reach /status on the LAN ---
 Section "Firewall"
 $fwName = "InstaBOX-$port"
 netsh advfirewall firewall delete rule "name=$fwName" >$null 2>&1
@@ -153,13 +174,15 @@ try {
 Section "Done"
 Write-Host "Start now:   schtasks /Run /TN $taskName"
 if ((Test-Path $wdPy) -and (Test-Path $venvPy)) { Write-Host "             schtasks /Run /TN $wdName" }
-Write-Host "Kiosk URL:   http://localhost:$port/kiosk"
-if ($ip) { Write-Host "For the tablet (Fully Kiosk):  http://$ip`:$port/kiosk" -ForegroundColor Green }
-Write-Host "Owner status page:  http://localhost:$port/status"
+Write-Host "Kiosk URL:   http://localhost:$port/kiosk   (Chrome opens this at logon)"
+if ($ip) { Write-Host "Status from the owner's phone:  http://$ip`:$port/status" -ForegroundColor Green }
 Write-Host ""
 Write-Host "Still MANUAL (see DEPLOY.md):" -ForegroundColor Yellow
 Write-Host "  * Windows auto-login (netplwiz) - required, task runs -AtLogOn" -ForegroundColor Yellow
-Write-Host "  * dslrBooth: fullscreen autostart (shell:startup), trigger key, print-only" -ForegroundColor Yellow
+Write-Host "  * laptop lid: Power Options -> 'Do nothing' on close, so Windows" -ForegroundColor Yellow
+Write-Host "    runs on the touch monitor as the ONLY display" -ForegroundColor Yellow
+Write-Host "  * dslrBooth: fullscreen autostart, REST API on, Triggers URL set," -ForegroundColor Yellow
+Write-Host "    Live View ON, per-photo review with Retake ~5s, sharing screens OFF," -ForegroundColor Yellow
+Write-Host "    'always on top' OFF (or our QR can never cover it)" -ForegroundColor Yellow
 Write-Host "  * pause Windows Update active hours / defer restarts" -ForegroundColor Yellow
 Write-Host "  * static DHCP lease for this PC on the router" -ForegroundColor Yellow
-Write-Host "  * Fully Kiosk on the tablet -> the URL above" -ForegroundColor Yellow

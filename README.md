@@ -67,12 +67,14 @@ autostart, static IP, Fully Kiosk) are printed at the end and listed in
    - *(dslrBooth Pro, recommended)* set `DSLRBOOTH_EVENTS_ENABLED=1` +
      `DSLRBOOTH_EVENT_TOKEN=<random>`, then in dslrBooth **Settings › General ›
      Triggers** set the URL to
-     `http://localhost:8000/dslrbooth/event?token=<random>`. Now the tablet's
-     screens (and the 3·2·1 countdown) follow the real camera instead of a timer.
+     `http://localhost:8000/dslrbooth/event?token=<random>`. The screens then
+     follow the real camera instead of a timer.
    - Give the PC a **static DHCP lease** on the router.
-   - On the **Android tablet**: install *Fully Kiosk Browser*, point it at
-     `http://<pc-ip>:8000/kiosk`, enable *Start on Boot*, *Screen Always On*,
-     *Auto Reload on Connection Error*, *Relaunch on Crash*.
+   - **Touch monitor (HDMI + USB)** wired to the booth PC is the only screen.
+     Close the laptop lid (Power Options → *Do nothing* on close) so Windows
+     runs on it as the single display, and let `setup.ps1` put
+     `start_kiosk.bat` in `shell:startup`. In dslrBooth turn **Live View** on,
+     enable the per-photo review with **Retake**, and turn *always on top* off.
    - A small **UPS** on the PC + router rides out short power cuts.
 4. Measure `SESSION_DURATION_SEC` / `PRINT_DURATION_SEC` with a stopwatch on
    the real booth and put them in `.env`, then restart the task.
@@ -179,12 +181,36 @@ frontend/
   static/vendor/morphicons.js   animated icon web component (bundled, MIT)
 СТАРТ_ТУТ.bat           customer entry point — self-elevates, .env wizard, setup, start
 make_release.py / .bat  build a clean InstaBOX_release.zip for handover
+start_kiosk.bat         Chrome in kiosk mode on the touch monitor (autostarts at logon)
 setup.ps1 / setup.bat   Windows installer — venv, firewall, power, Scheduled Tasks
 run.bat                 launcher with crash-restart loop (also starts the watchdog)
 watchdog.py / .bat      external watchdog — restarts a wedged backend, escalates to PC reboot
 check.bat               pre-flight self-check (backend.selfcheck)
 update.bat              git pull + deps
 ```
+
+### Who owns the screen
+
+One touch monitor, two fullscreen apps. Live view and the Retake button are
+features of dslrBooth's **own window** — there is no API to stream them out, so
+the guest has to be looking at that window while the camera works. The backend
+hands the glass over at the state transitions (`backend/winfocus.py`):
+
+| State | Foreground |
+|---|---|
+| IDLE / AWAITING_PAYMENT | Chrome — our QR screen |
+| PAID → SHOOTING | **dslrBooth** — live view, countdown, Retake |
+| PRINTING / DONE / errors | Chrome — "друкуємо", "готово", refund reason |
+
+dslrBooth is raised *before* the trigger fires (in hotkey mode the keypress has
+to land in it, not in Chrome), and Chrome is taken back on `printing`, on
+`session_end` and on every error path — a guest who just lost their money must
+see why, not dslrBooth's idle screen.
+
+Because dslrBooth draws its own countdown, there is no second timeline left to
+keep in sync. `DISPLAY_MIN_COUNT=1` additionally stops the booth selling when
+the monitor is unplugged: otherwise the backend stays perfectly healthy while
+the windows migrate somewhere nobody can see.
 
 ### Two-layer recovery
 
@@ -219,4 +245,4 @@ Needs the real thing:
   fallback timings either way.
 - **Printer** — confirm the photo printer's Windows `PrinterStatus` strings for
   offline / out-of-paper (drivers vary) and tune `backend/printer.py` if needed.
-- **On-site** — auto-login, dslrBooth autostart, Fully Kiosk, static IP, UPS.
+- **On-site** — auto-login, dslrBooth autostart, lid closed, static IP, UPS.

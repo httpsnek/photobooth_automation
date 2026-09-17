@@ -12,7 +12,7 @@ import time
 
 import httpx
 
-from . import notify, payment, printer
+from . import notify, payment, printer, winfocus
 from .config import VERSION, settings
 from .dslrbooth import BoothTrigger
 from .payment import PaymentProvider
@@ -314,6 +314,11 @@ class Controller:
         await notify.payment_received(self.session.amount_uah, self.session.id)
         self._drain_booth_events()
 
+        # The screen belongs to dslrBooth from here until printing. Raise it
+        # BEFORE the trigger: in hotkey mode the keypress has to land in
+        # dslrBooth, not in Chrome.
+        await winfocus.raise_booth()
+
         if not await self._trigger_with_retries():
             await self._refund("Кабінка не відповідає (камера або ПЗ)")
             return
@@ -373,6 +378,8 @@ class Controller:
                 self._shoot_phase("processing")
             elif kind == "printing":
                 printing_seen = True
+                # shooting and retakes are over — take the glass back
+                await winfocus.raise_kiosk()
                 await self._enter(State.PRINTING, settings.print_duration_sec)
             elif kind == "booth_error":
                 await self._refund(
@@ -380,6 +387,7 @@ class Controller:
                 )
                 return
             elif kind == "session_done":
+                await winfocus.raise_kiosk()   # backstop if `printing` never came
                 if self.session.shot == 0:
                     await self._refund("Сесія завершилась без жодного кадру")
                     return
@@ -421,11 +429,13 @@ class Controller:
         self._shoot_phase("processing")
         await self._sleep(1.0)
 
+        await winfocus.raise_kiosk()
         await self._enter(State.PRINTING, settings.print_duration_sec)
         await self._sleep(settings.print_duration_sec)
         await self._finish_session()
 
     async def _finish_session(self) -> None:
+        await winfocus.raise_kiosk()   # idempotent: every exit ends on our screen
         self.session.finished_at = time.time()
         self.session.shoot_phase = ""
         self.session.countdown_deadline = None
@@ -454,6 +464,8 @@ class Controller:
         return False
 
     async def _refund(self, reason: str) -> None:
+        # the guest must see WHY — never leave them staring at dslrBooth
+        await winfocus.raise_kiosk()
         self.session.error = reason
         await self._enter(State.REFUNDING, None)
         amount = self.session.amount_uah or settings.price_uah
@@ -541,6 +553,11 @@ class Controller:
             return "Закінчився папір — заміни рулон"
 
         with contextlib.suppress(Exception):
+            scr = await winfocus.display_problem()
+            if scr:
+                return scr
+
+        with contextlib.suppress(Exception):
             pr = await printer.printer_problem()
             if pr:
                 return pr
@@ -555,6 +572,7 @@ class Controller:
 
     async def _recover_stuck_session(self, reason: str) -> None:
         """The session loop died mid-flow. Refund the guest and get clean."""
+        await winfocus.raise_kiosk()
         st = self.session.state.value
         inv, sid = self.session.invoice_id, self.session.id
         amount = self.session.amount_uah or settings.price_uah

@@ -340,3 +340,69 @@ async def test_pause_blocks_sessions(store):
     assert ctrl.session.state == State.OUT_OF_SERVICE
     await ctrl.resume("test")
     assert not ctrl._paused
+
+
+# ── who owns the touch screen ─────────────────────────────────────────────
+# One monitor, two fullscreen apps: dslrBooth must come forward for the shoot
+# (its own live view / countdown / retake) and our kiosk must come back the
+# instant printing starts — and on every error path, or the guest is left
+# staring at dslrBooth with no idea what happened.
+
+@contextlib.contextmanager
+def _spy_windows():
+    from backend import winfocus
+    calls: list[str] = []
+    orig = winfocus.raise_booth, winfocus.raise_kiosk
+
+    async def booth():
+        calls.append("booth")
+        return True
+
+    async def kiosk():
+        calls.append("kiosk")
+        return True
+
+    winfocus.raise_booth, winfocus.raise_kiosk = booth, kiosk
+    try:
+        yield calls
+    finally:
+        winfocus.raise_booth, winfocus.raise_kiosk = orig
+
+
+async def test_screen_handoff_booth_then_kiosk(store):
+    with _override(dslrbooth_events_enabled=True, get_ready_sec=0.01,
+                   print_duration_sec=0.02, done_duration_sec=0.02), \
+         _spy_windows() as calls:
+        provider = MockProvider()
+        ctrl = Controller(provider, FakeTrigger(), store, SpyBroadcaster())
+        await _to_paid(ctrl, provider)
+
+        async def feed():
+            await asyncio.sleep(0.05)
+            await ctrl.on_booth_event("shoot_begin")
+            for i in range(4):
+                await ctrl.on_booth_event("shot_countdown", {"seconds": 0.01})
+                await ctrl.on_booth_event("shot_capture")
+                await ctrl.on_booth_event("shot_saved", {"file": f"{i}.jpg"})
+            await ctrl.on_booth_event("processing")
+            await ctrl.on_booth_event("printing", {"copies": 1})
+            await ctrl.on_booth_event("session_done")
+
+        await asyncio.gather(ctrl._tick(), feed())
+
+        assert calls[0] == "booth", "dslrBooth must own the screen for the shoot"
+        assert "kiosk" in calls, "our kiosk never came back"
+        assert calls.index("booth") < calls.index("kiosk")
+        assert calls[-1] == "kiosk", "the session must end on our screen"
+        assert ctrl.session.state == State.DONE
+
+
+async def test_screen_returns_to_kiosk_on_refund(store):
+    with _spy_windows() as calls:
+        provider = MockProvider()
+        ctrl = Controller(provider, _Dead(), store, SpyBroadcaster())
+        await _to_paid(ctrl, provider)
+        await ctrl._tick()          # trigger fails -> refund
+
+        assert ctrl.session.state == State.REFUNDED
+        assert calls[-1] == "kiosk", "error screen must be visible to the guest"

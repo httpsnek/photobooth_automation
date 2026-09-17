@@ -152,6 +152,32 @@ def check_watchdog() -> None:
         line(OK, "watchdog", "present (Windows task check skipped)")
 
 
+def check_screen() -> None:
+    """Both fullscreen apps must be findable, or the handoff silently no-ops."""
+    from . import winfocus
+    if not settings.window_switch_enabled:
+        line(WARN, "screen", "WINDOW_SWITCH_ENABLED=0 — dslrBooth will never come forward")
+        return
+    if sys.platform != "win32":
+        line(WARN, "screen", "window switching is Windows-only (expected off-Windows)")
+        return
+
+    n = winfocus.display_count()
+    if settings.display_min_count and n and n < settings.display_min_count:
+        line(FAIL, "screen", f"{n} monitor(s), DISPLAY_MIN_COUNT={settings.display_min_count}")
+    else:
+        line(OK, "screen", f"{n} monitor(s) attached")
+
+    booth = winfocus._find_window(("dslrbooth",), winfocus._names(settings.dslrbooth_proc_names))
+    line(OK if booth else FAIL, "screen · dslrBooth",
+         "window found" if booth else "window NOT found — start dslrBooth first")
+
+    kiosk = winfocus._find_window((settings.kiosk_title,), winfocus._names(settings.kiosk_proc_names))
+    line(OK if kiosk else WARN, "screen · kiosk",
+         f"window found ('{settings.kiosk_title}')" if kiosk
+         else f"no window titled '{settings.kiosk_title}' — run start_kiosk.bat")
+
+
 async def main() -> int:
     print(f"InstaBOX selfcheck  ·  v{VERSION}  ·  booth {settings.booth_id} ({settings.booth_name})\n")
     for w in settings.warnings():
@@ -160,6 +186,7 @@ async def main() -> int:
     await check_acquirer()
     await check_dslrbooth()
     await check_printer()
+    check_screen()
     await check_pending_refunds()
     check_watchdog()
     await check_telegram()

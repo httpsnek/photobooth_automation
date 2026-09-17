@@ -112,7 +112,17 @@ class Settings:
     #  dslrBooth appends &event_type=…&param1=…  on every session event.
     dslrbooth_events_enabled: bool = _bool("DSLRBOOTH_EVENTS_ENABLED")
     dslrbooth_event_token: str = _get("DSLRBOOTH_EVENT_TOKEN")
-    booth_watchdog_sec: float = _float("BOOTH_WATCHDOG_SEC", 90)  # no event this long ⇒ refund
+    # generous: a guest deliberating on the retake screen still counts as alive
+    booth_watchdog_sec: float = _float("BOOTH_WATCHDOG_SEC", 120)  # no event this long ⇒ refund
+
+    # ── Who owns the touch screen (one monitor, two fullscreen apps) ──
+    #  Chrome (our kiosk) holds it except during the shoot, when dslrBooth
+    #  comes forward for its own live view / countdown / retake UI.
+    window_switch_enabled: bool = _bool("WINDOW_SWITCH_ENABLED", True)
+    kiosk_window_title: str = _get("KIOSK_WINDOW_TITLE")   # empty → BOOTH_NAME (the page <title>)
+    kiosk_proc_names: str = _get("KIOSK_PROC_NAMES", "chrome.exe,msedge.exe")
+    window_raise_retries: int = _int("WINDOW_RAISE_RETRIES", 3)
+    display_min_count: int = _int("DISPLAY_MIN_COUNT", 0)  # 0 = off; 1 = require a screen
 
     # ── Session timing ─────────────────────────────────────────
     #  With events on, these are only a safety fallback. With events off
@@ -164,6 +174,15 @@ class Settings:
     mock_fail: bool = _bool("MOCK_FAIL")
 
     # ── Derived ───────────────────────────────────────────────
+    @property
+    def kiosk_title(self) -> str:
+        """Title substring identifying the Chrome kiosk window.
+
+        kiosk.html renders <title>{{ booth_name }}</title>, and Chrome puts the
+        page title in the window title — so BOOTH_NAME finds it by default.
+        """
+        return self.kiosk_window_title.strip() or self.booth_name.strip()
+
     @property
     def support_tg_url(self) -> str:
         """Full https://t.me/… link for the support QR, or ''."""
