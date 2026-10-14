@@ -678,3 +678,25 @@ async def test_printing_screen_held_even_if_session_end_comes_instantly(store):
         await asyncio.gather(ctrl._tick(), feed())
         assert ctrl.session.state == State.DONE
         assert time.monotonic() - t0 >= 0.4, "«Друкуємо» must stay up for PRINT_DURATION_SEC"
+
+
+async def test_rest_start_matches_lumabooth_api():
+    # LumaBooth's own settings page shows: /api/start?mode=print&password=…
+    # Early .env files say /api/take_photo, which LumaBooth does not have.
+    import httpx
+    from backend.dslrbooth import RestTrigger
+    seen = []
+
+    def handler(req):
+        seen.append(req.url)
+        return httpx.Response(200)
+
+    for url in ("http://localhost:1500/api/take_photo", "http://localhost:1500/api/start"):
+        with _override(dslrbooth_api_url=url, dslrbooth_api_password="u5h3", dslrbooth_api_mode="print"):
+            trig = RestTrigger()
+            trig._client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+            assert await trig.start() is True
+            await trig.aclose()
+    for u in seen:
+        assert u.path == "/api/start", u
+        assert u.params["mode"] == "print" and u.params["password"] == "u5h3"

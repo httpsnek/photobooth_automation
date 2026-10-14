@@ -76,6 +76,18 @@ def _booth_window_foreground() -> bool:
         return True
 
 
+def _start_url(url: str) -> str:
+    """The API's start command is /api/start?mode=print. Early builds of this
+    project shipped /api/take_photo in .env — an endpoint LumaBooth does not
+    have — so map it here instead of making every booth edit its .env."""
+    u = urlparse(url)
+    if u.path.rstrip("/").endswith("/take_photo"):
+        fixed = u._replace(path=u.path.rstrip("/")[: -len("take_photo")] + "start").geturl()
+        log.info("DSLRBOOTH_API_URL %s -> %s", url, fixed)
+        return fixed
+    return url
+
+
 class BoothTrigger:
     name = "base"
     last_error: str = ""     # human hint from the most recent failed start()
@@ -129,9 +141,10 @@ class RestTrigger(BoothTrigger):
 
     def __init__(self) -> None:
         self._client = httpx.AsyncClient(timeout=httpx.Timeout(8.0))
+        self.url = _start_url(settings.dslrbooth_api_url)
 
     def _params(self, extra: dict | None = None) -> dict:
-        p = {"mode": "start"}
+        p = {"mode": settings.dslrbooth_api_mode or "print"}
         if settings.dslrbooth_api_password:
             p["password"] = settings.dslrbooth_api_password
         if extra:
@@ -140,7 +153,7 @@ class RestTrigger(BoothTrigger):
 
     async def start(self) -> bool:
         try:
-            r = await self._client.get(settings.dslrbooth_api_url, params=self._params())
+            r = await self._client.get(self.url, params=self._params())
         except Exception as exc:
             log.error("dslrBooth REST unreachable: %s", exc)
             self.last_error = "API dslrBooth недоступний — dslrBooth запущено? API увімкнено?"
@@ -156,7 +169,7 @@ class RestTrigger(BoothTrigger):
         return False
 
     def _endpoint(self) -> tuple[str, int]:
-        u = urlparse(settings.dslrbooth_api_url)
+        u = urlparse(self.url)
         return (u.hostname or "127.0.0.1"), (u.port or (443 if u.scheme == "https" else 80))
 
     async def healthy(self) -> bool:

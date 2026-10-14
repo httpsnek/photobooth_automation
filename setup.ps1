@@ -49,10 +49,11 @@ $pyExe = $null
 foreach ($name in @("py", "python", "python3")) {
   $cmd = Get-Command $name -ErrorAction SilentlyContinue
   if (-not $cmd) { continue }
-  # Windows 10/11 ship python.exe in WindowsApps as a stub that only opens
-  # the Microsoft Store. It looks like Python but cannot create a venv.
-  if ($cmd.Source -like "*\WindowsApps\*") { continue }
-  $v = Native { & $cmd.Source -c "import sys; print('%d.%d' % sys.version_info[:2])" 2>$null }
+  # WindowsApps holds both the Microsoft Store stub (prints a hint, exit 9009)
+  # and the real aliases of python.org's Python install manager - so run it
+  # and judge by the answer instead of by the path. Empty stdin: a runtime
+  # prompt must not leave the installer waiting on invisible input.
+  $v = Native { $null | & $cmd.Source -c "import sys; print('%d.%d' % sys.version_info[:2])" 2>$null }
   if ($LASTEXITCODE -ne 0 -or -not $v) { continue }
   $parts = "$v".Trim().Split(".")
   if ([int]$parts[0] -eq 3 -and [int]$parts[1] -ge 10) { $pyExe = $cmd.Source; break }
@@ -75,7 +76,9 @@ if (-not (Test-Path $venvPy)) {
 Write-Host "Installing dependencies (needs internet, ~1-2 min)..."
 Native { & $venvPy -m pip install -r requirements.txt --disable-pip-version-check --quiet }
 if ($LASTEXITCODE -ne 0) {
-  Fail "Dependency install FAILED (pip exit $LASTEXITCODE). Check the internet connection and run again."
+  Fail ("Dependency install FAILED (pip exit $LASTEXITCODE).`n" +
+        "Check the internet connection and run again. If the internet is fine and Python $v`n" +
+        "is very new, install Python 3.12 (Windows installer 64-bit) from python.org instead.")
 }
 Write-Host "Dependencies installed."
 

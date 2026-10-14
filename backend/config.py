@@ -201,10 +201,12 @@ class Settings:
     # ── dslrBooth trigger: hotkey | rest ────────────────────────
     dslrbooth_trigger: str = _get("DSLRBOOTH_TRIGGER", "hotkey").strip().lower()
     dslrbooth_hotkey: str = _get("DSLRBOOTH_HOTKEY", "space")
+    # LumaBooth / dslrBooth start command: GET /api/start?mode=print&password=…
     dslrbooth_api_url: str = _get_any(
         ["DSLRBOOTH_API_URL", "DSLBOOTH_API_URL", "DSLRBOOTH_REST_URL"],
-        "http://localhost:1500/api/take_photo",
+        "http://localhost:1500/api/start",
     )
+    dslrbooth_api_mode: str = _get("DSLRBOOTH_API_MODE", "print").strip().lower()
     dslrbooth_api_password: str = _get("DSLRBOOTH_API_PASSWORD")
     # basic dslrBooth has no feedback — the hotkey trigger checks liveness by
     # confirming the process (and optionally the foreground window) instead.
