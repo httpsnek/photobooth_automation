@@ -18,6 +18,8 @@ from __future__ import annotations
 import asyncio
 import logging
 import sys
+import threading
+import time
 
 from .config import settings
 
@@ -188,22 +190,83 @@ def _names(csv: str) -> set[str]:
     return {n.strip().lower() for n in csv.split(",") if n.strip()}
 
 
+# Every raise goes through one lock, so the screen guard (below) and a
+# session handoff can never interleave and leave the wrong app on top.
+_LOCK = threading.Lock()
+_missing: set[str] = set()   # warn once per missing window, not every call
+
+
 def _bring_up(what: str, titles: tuple[str, ...], procs: set[str]) -> bool:
-    hwnd = _find_window(titles, procs)
-    if not hwnd:
-        log.warning("%s window not found (titles=%s procs=%s)", what, titles, sorted(procs))
+    with _LOCK:
+        hwnd = _find_window(titles, procs)
+        if not hwnd:
+            if what not in _missing:
+                _missing.add(what)
+                log.warning("%s window not found (titles=%s procs=%s)",
+                            what, titles, sorted(procs))
+            return False
+        _missing.discard(what)
+        for attempt in range(1, max(1, settings.window_raise_retries) + 1):
+            if _raise(hwnd):
+                log.info("%s window raised", what)
+                return True
+            log.debug("%s raise attempt %d failed", what, attempt)
+        log.warning("%s window would not come forward", what)
         return False
-    for attempt in range(1, max(1, settings.window_raise_retries) + 1):
-        if _raise(hwnd):
-            log.info("%s window raised", what)
-            return True
-        log.debug("%s raise attempt %d failed", what, attempt)
-    log.warning("%s window would not come forward", what)
-    return False
+
+
+def _foreground_pid() -> int:
+    api = _api()
+    if api is None:
+        return 0
+    ctypes, wintypes, u32, _ = api
+    pid = wintypes.DWORD()
+    u32.GetWindowThreadProcessId(u32.GetForegroundWindow(), ctypes.byref(pid))
+    return int(pid.value)
+
+
+def _sync_reclaim(booth_busy) -> bool:
+    """Put the kiosk back over a FRESHLY LAUNCHED dslrBooth.
+
+    At boot Chrome and dslrBooth start in random order; a newly launched
+    process is allowed to take the foreground, so dslrBooth's start screen
+    can land on top of our QR — and stay there, because nothing else raises
+    the kiosk until a paid session ends, which can't happen without a QR.
+
+    Only a dslrBooth process younger than SCREEN_GUARD_FRESH_SEC counts: an
+    owner who deliberately opens dslrBooth's settings on a running booth is
+    left alone (and /admin/pause stops the guard entirely).
+    """
+    with _LOCK:
+        if booth_busy():
+            return False
+        fg = _foreground_pid()
+        if not fg or fg not in _pids_for(_names(settings.dslrbooth_proc_names)):
+            return False
+        try:
+            import psutil
+            age = time.time() - psutil.Process(fg).create_time()
+        except Exception:
+            return False
+        if age > settings.screen_guard_fresh_sec:
+            return False
+        hwnd = _find_window((settings.kiosk_title,), _names(settings.kiosk_proc_names))
+        if not hwnd or booth_busy():
+            return False
+        ok = _raise(hwnd)
+        if ok:
+            log.info("kiosk reclaimed the screen from a freshly started dslrBooth")
+        return ok
+
+
+async def reclaim_from_booth(booth_busy) -> bool:
+    if not (_IS_WIN and settings.window_switch_enabled):
+        return False
+    return await asyncio.to_thread(_sync_reclaim, booth_busy)
 
 
 def _sync_raise_booth() -> bool:
-    return _bring_up("dslrBooth", ("dslrbooth",), _names(settings.dslrbooth_proc_names))
+    return _bring_up("dslrBooth", ("dslrbooth", "lumabooth"), _names(settings.dslrbooth_proc_names))
 
 
 def _sync_raise_kiosk() -> bool:

@@ -19,11 +19,20 @@ for /f "tokens=1 delims=# " %%p in ("%PORT%") do set "PORT=%%p"
 
 set "URL=http://localhost:%PORT%/kiosk"
 
+rem  Уже відкритий кіоск — другий не потрібен (дві повноекранні вкладки
+rem  плутають перемикання вікон).
+powershell -NoProfile -Command "$k = Get-CimInstance Win32_Process | Where-Object { ($_.Name -eq 'chrome.exe' -or $_.Name -eq 'msedge.exe') -and $_.CommandLine -like '*chrome-kiosk*' }; if ($k) { exit 0 } else { exit 1 }"
+if "%errorlevel%"=="0" (
+  echo   Кіоск уже відкритий.
+  exit /b 0
+)
+
 set "CHROME="
 if exist "%ProgramFiles%\Google\Chrome\Application\chrome.exe" set "CHROME=%ProgramFiles%\Google\Chrome\Application\chrome.exe"
 if not defined CHROME if exist "%ProgramFiles(x86)%\Google\Chrome\Application\chrome.exe" set "CHROME=%ProgramFiles(x86)%\Google\Chrome\Application\chrome.exe"
 if not defined CHROME if exist "%LocalAppData%\Google\Chrome\Application\chrome.exe" set "CHROME=%LocalAppData%\Google\Chrome\Application\chrome.exe"
 if not defined CHROME if exist "%ProgramFiles(x86)%\Microsoft\Edge\Application\msedge.exe" set "CHROME=%ProgramFiles(x86)%\Microsoft\Edge\Application\msedge.exe"
+if not defined CHROME if exist "%ProgramFiles%\Microsoft\Edge\Application\msedge.exe" set "CHROME=%ProgramFiles%\Microsoft\Edge\Application\msedge.exe"
 
 if not defined CHROME (
   echo.
@@ -33,5 +42,13 @@ if not defined CHROME (
   exit /b 1
 )
 
-rem  окремий профіль: киоск не воює за вікно зі звичайним Chrome власника
+rem  Після перезавантаження ПК браузер стартує раніше за бекенд. Відкрий його
+rem  зарано — і Chrome залишиться на своїй сторінці «сайт недоступний», де
+rem  наш код не працює і нічого не оновиться саме. Тому спершу чекаємо /health
+rem  (до ~10 хв), і лише тоді відкриваємо кіоск.
+echo   Чекаю, поки запуститься бекенд на порту %PORT%...
+powershell -NoProfile -Command "$u='http://127.0.0.1:%PORT%/health'; for ($i=0; $i -lt 150; $i++) { try { $null = Invoke-WebRequest -UseBasicParsing -TimeoutSec 2 -Uri $u; exit 0 } catch { Start-Sleep -Seconds 2 } }; exit 1"
+if not "%errorlevel%"=="0" echo   Бекенд не відповів - відкриваю кіоск усе одно.
+
+rem  окремий профіль: кіоск не воює за вікно зі звичайним Chrome власника
 start "" "%CHROME%" --kiosk --app="%URL%" --user-data-dir="%~dp0data\chrome-kiosk" --noerrdialogs --disable-infobars --disable-session-crashed-bubble --disable-pinch --overscroll-history-navigation=0 --check-for-update-interval=31536000

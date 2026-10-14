@@ -37,7 +37,7 @@
 ### Прив'язка до заліза
 - [ ] `PRINTER_NAME` — точна системна назва принтера (як у «Пристрої та принтери»); порожньо = принтер за замовчуванням
 - [ ] `PRINTER_CHECK_ENABLED=1` — перевірка черги друку Windows
-- [ ] `DSLRBOOTH_HOTKEY` — та сама клавіша, що призначена триггером у dslrBooth
+- [ ] `DSLRBOOTH_API_PASSWORD` — пароль API з dslrBooth (*Settings → General*)
 
 ### Сповіщення
 - [ ] `TELEGRAM_ALERTS_BOT_TOKEN` — валідний
@@ -96,8 +96,9 @@
 ### Режим подій (обов'язково — підписка є)
 - [ ] У `.env`: `DSLRBOOTH_TRIGGER=rest`, `DSLRBOOTH_EVENTS_ENABLED=1`, `DSLRBOOTH_API_PASSWORD=<пароль REST з dslrBooth>`
 - [ ] dslrBooth → *Settings → General → Triggers* → URL:
-      **`http://127.0.0.1:8000/dslrbooth/event?token=<DSLRBOOTH_EVENT_TOKEN>`**
-      *(саме `/dslrbooth/event`, не `/api/dslr-event`)*
+      **`http://127.0.0.1:8000/dslrbooth/event`**
+      *(саме `127.0.0.1`, не `localhost`; токен для цього ПК не потрібен)*
+- [ ] Після тестової сесії `check.bat` → `dslrbooth events — received from dslrBooth at least once`
 - [ ] Тестова сесія → у `logs/<BOOTH_ID>.log` немає рядків `unmapped booth event`
       (якщо є — звірити назви подій із таблицею `_MAP` у `backend/booth_events.py`)
 
@@ -114,7 +115,7 @@
 щоб гість бачив себе, відлік і кнопку Retake. Перемикає бекенд.
 
 - [ ] Монітор під'єднано: **HDMI** (зображення) + **USB** (сенсор)
-- [ ] Кришку ноутбука закрито; Електроживлення → «при закритті кришки — **нічого не робити**»
+- [ ] Кришку ноутбука закрито *(«при закритті — нічого не робити» `setup.ps1` виставляє сам)*
 - [ ] Windows працює на моніторі як на **єдиному** дисплеї (не «розширити»)
 - [ ] Сенсор влучає в ціль: «Параметри планшетного ПК» → *Налаштувати* → прив'язати дигитайзер до цього екрана
 - [ ] `start_kiosk.bat` в автозавантаженні (`shell:startup` — ярлик кладе `setup.ps1`),
@@ -158,8 +159,10 @@
 
 - [ ] Передати **HANDOVER.md** (що означають сповіщення, що робити коли…)
 - [ ] Показати сторінку статусу: `http://<IP_ПК>:8000/status`
-- [ ] Дати `ADMIN_TOKEN` і посилання:
-      пауза `…/admin/pause?token=…` · зняти з паузи `…/admin/resume?token=…` · заміна рулону `…/admin/paper-reset?token=…`
+- [ ] Дати посилання (токен згенерований автоматично — він у `.env`, рядок `ADMIN_TOKEN`).
+      Кожне відкриває сторінку з кнопкою «Підтвердити» — працює з телефона:
+      заміна рулону `…/admin/paper-reset?token=…` · пауза `…/admin/pause?token=…` ·
+      відновити продаж `…/admin/resume?token=…` *(знімає і паузу, і блокування після збоїв камери)*
 - [ ] Пояснити: оновлення коду на точці — `update.bat`, далі перезапустити задачу
 
 ---
@@ -171,7 +174,8 @@
 | Екран: `Тимчасово не працює` | причина — у Telegram; лог `logs/<BOOTH_ID>.log` |
 | Немає сповіщень у Telegram | власник не натиснув Start; або невірний `TELEGRAM_ADMIN_CHAT_ID` |
 | `check.bat` → `acquirer [ FAIL ]` | невірний `BANK_TOKEN` або немає інтернету |
-| Камера не знімає після оплати | `DSLRBOOTH_HOTKEY` ≠ клавіша в dslrBooth; dslrBooth не у фокусі; або процес не запущено |
+| Камера не знімає після оплати | `check.bat` → рядок `dslrbooth`; невірний `DSLRBOOTH_API_PASSWORD` названо прямо в причині повернення |
+| Після 2 збоїв поспіль точка не продає | захист від повернень гостям; усунути причину → `…/admin/resume?token=…` |
 | Кіоск не відкрився | `start_kiosk.bat` не в автозавантаженні потрібного користувача; бекенд не піднявся |
 | Вікно dslrBooth не виринає | `WINDOW_SWITCH_ENABLED=0`; у dslrBooth увімкнено «always on top»; `check.bat` → `screen · dslrBooth` |
 | Chrome не повертається після зйомки | не прийшла подія `printing`/`session_end` — звірити Triggers URL; `check.bat` → `screen · kiosk` |

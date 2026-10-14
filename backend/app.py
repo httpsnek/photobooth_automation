@@ -3,7 +3,10 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import html
 import logging
+import os
+import sys
 
 from fastapi import FastAPI, Request, Response
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, StreamingResponse
@@ -24,8 +27,42 @@ log = logging.getLogger("app")
 templates = Jinja2Templates(directory=str(BASE_DIR / "frontend" / "templates"))
 
 
+ALREADY_RUNNING_EXIT = 17   # run.bat stops its restart loop on this code
+_instance_lock = None
+
+
+def _acquire_instance_lock():
+    """One backend per booth. uvicorn runs lifespan BEFORE binding the port,
+    so a second copy (СТАРТ_ТУТ.bat run again, run.bat double-clicked) would
+    start a controller against the same DB before failing on the port — and
+    its restart loop would then retry every 5s forever. An OS lock is released
+    by Windows itself if the holder dies, so a killed backend never leaves a
+    stale lock behind."""
+    path = settings.db_file.with_suffix(".lock")
+    f = open(path, "a+")
+    try:
+        if sys.platform == "win32":
+            import msvcrt
+            f.seek(0)
+            msvcrt.locking(f.fileno(), msvcrt.LK_NBLCK, 1)
+        else:
+            import fcntl
+            fcntl.flock(f.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        f.close()
+        return None
+    return f
+
+
 @contextlib.asynccontextmanager
 async def lifespan(app: FastAPI):
+    global _instance_lock
+    _instance_lock = _acquire_instance_lock()
+    if _instance_lock is None:
+        log.error("another InstaBOX backend for booth %s is already running — exiting",
+                  settings.booth_id)
+        os._exit(ALREADY_RUNNING_EXIT)
+
     for w in settings.warnings():
         log.warning("CONFIG: %s", w)
 
@@ -210,16 +247,17 @@ async def status_page(request: Request) -> HTMLResponse:
         ("Блокування", s.get("block_reason") or "—"),
         ("Остання помилка", s["last_error"] or "—"),
     ]
-    body = "".join(f"<tr><th>{k}</th><td>{v}</td></tr>" for k, v in rows)
+    body = "".join(f"<tr><th>{k}</th><td>{html.escape(str(v))}</td></tr>" for k, v in rows)
+    name = html.escape(s["booth_name"])
     return HTMLResponse(
         f"""<!doctype html><meta charset=utf-8>
 <meta name=viewport content="width=device-width,initial-scale=1">
-<title>{s['booth_name']} · статус</title>
+<title>{name} · статус</title>
 <style>body{{font:15px/1.5 system-ui,sans-serif;max-width:520px;margin:24px auto;padding:0 16px;color:#16151a}}
 h1{{font-size:19px}} table{{width:100%;border-collapse:collapse}}
 th{{text-align:left;color:#8a8a8e;font-weight:600;padding:8px 12px 8px 0;white-space:nowrap;vertical-align:top}}
-td{{padding:8px 0}} tr+tr{{border-top:1px solid #eee}}</style>
-<h1>{s['booth_name']} · статус</h1><table>{body}</table>
+td{{padding:8px 0;white-space:pre-line}} tr+tr{{border-top:1px solid #eee}}</style>
+<h1>{name} · статус</h1><table>{body}</table>
 <p style="margin-top:20px;color:#8a8a8e;font-size:14px">
 Перевірка перемикання вікон:
 <code>/admin/test-windows?token=&lt;ADMIN_TOKEN&gt;</code></p>""",
@@ -274,7 +312,7 @@ td:first-child{{width:28px}}td:last-child{{color:#b00;font-size:14px}}</style>
      "Не знайдено або не виходить на передній план. Запусти dslrBooth; "
      "перевір, що в ньому ВИМКНЕНО «always on top».")}
 {row(kiosk_ok, "Вікно кіоску повернулось",
-     f"Не знайдено вікно з назвою «{settings.kiosk_title}». "
+     f"Не знайдено вікно з назвою «{html.escape(settings.kiosk_title)}». "
      "Запусти start_kiosk.bat; назва береться з BOOTH_NAME.")}
 </table>
 <p style="margin-top:24px">Якщо обидва рядки зеленi — зйомка i повернення на наш екран
@@ -282,9 +320,47 @@ td:first-child{{width:28px}}td:last-child{{color:#b00;font-size:14px}}</style>
     return HTMLResponse(body)
 
 
-@app.post("/admin/{action}")
-async def admin(action: str, request: Request) -> JSONResponse:
+_ADMIN_ACTIONS = {
+    "pause":       ("Поставити кабінку на паузу", "Кабінку поставлено на паузу."),
+    "resume":      ("Відновити продаж (зняти паузу / блокування камери)", "Продаж відновлено."),
+    "paper-reset": ("Новий рулон — скинути лічильник паперу", "Лічильник паперу скинуто."),
+}
+
+
+def _admin_page(title: str, body: str, status: int = 200) -> HTMLResponse:
+    return HTMLResponse(
+        f"""<!doctype html><meta charset=utf-8>
+<meta name=viewport content="width=device-width,initial-scale=1">
+<title>{html.escape(settings.booth_name)} · {html.escape(title)}</title>
+<style>body{{font:17px/1.5 system-ui,sans-serif;max-width:480px;margin:32px auto;padding:0 18px;color:#16151a}}
+h1{{font-size:20px}} button{{font:600 18px system-ui;width:100%;padding:18px;border:0;border-radius:12px;
+background:#D6256E;color:#fff}} p{{color:#555}}</style>
+<h1>{html.escape(title)}</h1>{body}""",
+        status_code=status,
+    )
+
+
+@app.get("/admin/{action}", response_class=HTMLResponse, include_in_schema=False)
+async def admin_confirm(action: str, request: Request) -> Response:
+    """The owner opens these links on a phone, which is a GET. Doing the
+    action on GET would let a link preview (Telegram fetches pasted links)
+    pause the booth on its own — so GET only shows a confirm button."""
     if not _admin_ok(request):
+        return _admin_page("Невірне посилання", "<p>Перевірте token у посиланні.</p>", 401)
+    if action not in _ADMIN_ACTIONS:
+        return _admin_page("Невідома дія", "", 404)
+    label, _ = _ADMIN_ACTIONS[action]
+    token = html.escape(request.query_params.get("token", ""), quote=True)
+    return _admin_page(label, f"""<form method="post" action="/admin/{action}?token={token}">
+<button type="submit">Підтвердити</button></form>""")
+
+
+@app.post("/admin/{action}")
+async def admin(action: str, request: Request) -> Response:
+    browser = "text/html" in request.headers.get("accept", "")
+    if not _admin_ok(request):
+        if browser:
+            return _admin_page("Невірне посилання", "<p>Перевірте token у посиланні.</p>", 401)
         return JSONResponse({"error": "unauthorized"}, status_code=401)
     ctrl = _ctrl(request)
     if action == "pause":
@@ -295,6 +371,9 @@ async def admin(action: str, request: Request) -> JSONResponse:
         await ctrl.reset_paper()
     else:
         return JSONResponse({"error": "unknown action"}, status_code=404)
+    if browser:
+        _, done = _ADMIN_ACTIONS[action]
+        return _admin_page("Готово", f"<p>{html.escape(done)}</p>")
     return JSONResponse(await ctrl.status())
 
 
@@ -322,8 +401,14 @@ async def dslrbooth_event(request: Request) -> Response:
     It calls us (HTTP GET) with ?event_type=…&param1=… on every session event.
     """
     q = request.query_params
-    if settings.dslrbooth_event_token and q.get("token") != settings.dslrbooth_event_token:
-        log.warning("dslrbooth event rejected (bad token)")
+    # dslrBooth runs on this same PC and calls 127.0.0.1. A token typo in the
+    # hand-typed Triggers URL used to silently drop every event — and with
+    # no events every paid session ended in a refund. Only callers from the
+    # LAN still need the token.
+    host = (request.client.host if request.client else "") or ""
+    local = host in ("127.0.0.1", "::1", "localhost") or host.startswith("::ffff:127.")
+    if not local and settings.dslrbooth_event_token and q.get("token") != settings.dslrbooth_event_token:
+        log.warning("dslrbooth event from %s rejected (bad token)", host)
         return Response(status_code=403)
     params = dict(q)
     await request.app.state.booth_events.handle(params.get("event_type", ""), params)

@@ -10,6 +10,7 @@ import sys
 
 import httpx
 
+from .state import SessionStore
 from .config import VERSION, settings
 
 OK, WARN, FAIL = "  OK ", " WARN", " FAIL"
@@ -23,6 +24,10 @@ def line(status: str, name: str, detail: str = "") -> tuple[str, str]:
 async def check_acquirer() -> None:
     if settings.payment_provider == "mock":
         line(WARN, "acquirer", "PAYMENT_PROVIDER=mock — no real payments")
+        return
+    if settings.payment_provider != "monobank":
+        line(FAIL, "acquirer", f"PAYMENT_PROVIDER='{settings.payment_provider}' — must be "
+                               "monobank; the booth refuses to sell until fixed")
         return
     if not settings.bank_token:
         line(FAIL, "acquirer", "BANK_TOKEN is empty")
@@ -46,9 +51,18 @@ async def check_acquirer() -> None:
 
 async def check_dslrbooth() -> None:
     if settings.dslrbooth_events_enabled:
-        tok = "with token" if settings.dslrbooth_event_token else "NO TOKEN (unauthenticated)"
-        line(OK if settings.dslrbooth_event_token else WARN, "dslrbooth events",
-             f"on · put /dslrbooth/event {tok} as a Trigger URL in dslrBooth Pro")
+        line(OK, "dslrbooth events",
+             f"on · Triggers URL in dslrBooth: http://127.0.0.1:{settings.port}/dslrbooth/event")
+        try:
+            store = SessionStore()
+            await store.init()
+            seen = await store.get_meta("events_seen", "0") == "1"
+            line(OK if seen else WARN, "dslrbooth events",
+                 "received from dslrBooth at least once" if seen else
+                 "none received yet — do one test session; if still none, "
+                 "the Triggers URL in dslrBooth is missing or wrong")
+        except Exception as exc:
+            line(WARN, "dslrbooth events", f"could not read history: {exc}")
     else:
         line(WARN, "dslrbooth events", "off — screens run on the SESSION_DURATION_SEC timers")
 
@@ -56,13 +70,21 @@ async def check_dslrbooth() -> None:
         line(WARN, "dslrbooth", "FAKE_TRIGGER_OK=1 — camera will not fire")
         return
     if settings.dslrbooth_trigger == "rest":
+        # TCP only — never a request to take_photo: the installer runs this
+        # check every time, and a probe on the START command must not be able
+        # to fire a session. The password itself is only proven by a real
+        # start; a wrong one is named in the refund reason.
+        from .dslrbooth import RestTrigger
+        trig = RestTrigger()
         try:
-            async with httpx.AsyncClient(timeout=6.0) as c:
-                r = await c.get(settings.dslrbooth_api_url, params={"mode": "status"})
-            line(OK if r.status_code < 500 else WARN, "dslrbooth",
-                 f"REST HTTP {r.status_code}")
-        except Exception as exc:
-            line(FAIL, "dslrbooth", f"REST unreachable: {exc}")
+            if await trig.healthy():
+                line(OK, "dslrbooth", "API reachable (password is checked on the first real session)")
+            else:
+                line(FAIL, "dslrbooth", trig.unhealthy_reason())
+        finally:
+            await trig.aclose()
+        if not settings.dslrbooth_api_password:
+            line(FAIL, "dslrbooth", "DSLRBOOTH_API_PASSWORD is empty in .env")
     else:
         try:
             import pyautogui  # noqa: F401
@@ -168,7 +190,7 @@ def check_screen() -> None:
     else:
         line(OK, "screen", f"{n} monitor(s) attached")
 
-    booth = winfocus._find_window(("dslrbooth",), winfocus._names(settings.dslrbooth_proc_names))
+    booth = winfocus._find_window(("dslrbooth", "lumabooth"), winfocus._names(settings.dslrbooth_proc_names))
     line(OK if booth else FAIL, "screen · dslrBooth",
          "window found" if booth else "window NOT found — start dslrBooth first")
 

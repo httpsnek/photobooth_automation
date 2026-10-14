@@ -1,94 +1,118 @@
 @echo off
 chcp 65001 >nul
-title InstaBOX - rozgortannya tochky
+title InstaBOX - vstanovlennia
 cd /d "%~dp0"
 
 rem ================================================================
-rem  Запуск нової будки в 1 клік.
-rem  Розпакуйте архів і запустіть цей файл ВІД ІМЕНІ АДМІНІСТРАТОРА
-rem  (правою кнопкою -> "Запуск від імені адміністратора",
-rem   або подвійним кліком -> підтвердьте запит UAC).
+rem  Встановлення / оновлення точки InstaBOX в 1 клік.
+rem  Можна запускати скільки завгодно разів: кожен запуск застосовує
+rem  поточний .env і перезапускає все з нуля.
 rem ================================================================
 
-rem ---- перевірка прав адміністратора + авто-перезапуск через UAC ----
+rem ---- права адміністратора; перезапуск через UAC ----
+rem  шлях передаємо через змінну середовища: апостроф у назві папки
+rem  (C:\Users\Мар'яна\...) зламав би рядок у лапках PowerShell
 net session >nul 2>&1
 if not "%errorlevel%"=="0" (
   echo.
   echo   Потрібні права адміністратора - підтвердьте запит Windows...
-  echo.
-  powershell -NoProfile -Command "Start-Process -FilePath '%~f0' -Verb RunAs"
+  set "SELF=%~f0"
+  powershell -NoProfile -Command "Start-Process -FilePath $env:SELF -Verb RunAs"
   exit /b
 )
 cd /d "%~dp0"
 
 echo ============================================================
-echo   InstaBOX  -  розгортання точки
+echo   InstaBOX  -  встановлення точки
 echo ============================================================
 echo.
 
-rem ---- крок 1: .env ----
-if not exist ".env" (
-  if not exist ".env.example" (
-    echo [ПОМИЛКА] у папці немає ні .env, ні .env.example
-    echo Архів розпаковано не повністю.
-    echo.
-    pause
-    exit /b 1
-  )
-  copy /y ".env.example" ".env" >nul
-  echo Створено .env з шаблону .env.example
-) else (
-  echo Знайдено наявний .env
+rem ---- крок 1: файл налаштувань .env ----
+if exist ".env" goto have_env
+if exist "InstaBOX.env.txt" (
+  copy /y "InstaBOX.env.txt" ".env" >nul
+  echo Створено .env з файлу InstaBOX.env.txt
+  goto have_env
 )
+if exist ".env.txt" (
+  copy /y ".env.txt" ".env" >nul
+  echo Створено .env з файлу .env.txt
+  goto have_env
+)
+if not exist ".env.example" (
+  echo [ПОМИЛКА] у папці немає .env.example - архів розпаковано не повністю.
+  echo.
+  pause
+  exit /b 1
+)
+copy /y ".env.example" ".env" >nul
+echo Створено новий .env з шаблону.
 
+:have_env
 echo.
 echo ------------------------------------------------------------
-echo   Зараз відкриється .env у Блокноті.
+echo   Зараз відкриється файл налаштувань .env у Блокноті.
 echo.
-echo   Заповніть / перевірте як мінімум:
-echo     BOOTH_ID       - унікальний id точки, напр. kiosk_mall_01
-echo     BOOTH_NAME     - назва точки
-echo     PRICE_UAH      - ціна фотосесії
-echo     PRINTER_NAME     - точна назва принтера Windows, порожньо = типовий
-echo     SUPPORT_TELEGRAM - @юзернейм або t.me/... підтримки (QR на екрані помилки)
-echo     PAPER_CAPACITY   - скільки відбитків з рулону
-echo     BANK_TOKEN, TELEGRAM_ALERTS_BOT_TOKEN, TELEGRAM_ADMIN_CHAT_ID
+echo   Заповніть рядки з позначкою  ^<^<^< ЗАПОВНИТИ  :
+echo     BANK_TOKEN              - токен еквайрингу Monobank
+echo     DSLRBOOTH_API_PASSWORD  - пароль API з налаштувань dslrBooth
+echo     SUPPORT_TELEGRAM        - Telegram підтримки, напр. @instabox
+echo     PAPER_CAPACITY          - скільки відбитків дає рулон
 echo.
-echo   Після правок: збережіть файл Ctrl+S і закрийте Блокнот.
+echo   Дуже бажано також: TELEGRAM_ALERTS_BOT_TOKEN і TELEGRAM_ADMIN_CHAT_ID
+echo.
+echo   Потім: Ctrl+S, закрити Блокнот - встановлення продовжиться.
 echo ------------------------------------------------------------
 echo.
 pause
 start "" /wait notepad.exe "%~dp0.env"
 
-rem ---- крок 2: налаштування системи ----
+rem ---- крок 2: зупинити попередній запуск ----
+rem  інакше старий бекенд зі старими налаштуваннями лишився б працювати,
+rem  а правки в .env не застосувались би
+if exist ".venv\Scripts\python.exe" (
+  ".venv\Scripts\python.exe" -m backend.envtool stop >nul 2>&1
+)
+
+rem ---- крок 3: встановлення та самоперевірка ----
 echo.
-echo Налаштування системи: брандмауер, електроживлення, автозапуск...
+echo Встановлення: Python, залежності, автозапуск, брандмауер, живлення...
 echo.
 powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0setup.ps1"
 if not "%errorlevel%"=="0" (
   echo.
-  echo [ПОМИЛКА] setup.ps1 завершився з помилкою, код %errorlevel%.
-  echo Усуньте причину і запустіть цей файл ще раз.
+  echo [ПОМИЛКА] Встановлення зупинилось - причина написана вище червоним.
+  echo Виправте її і запустіть цей файл ще раз.
   echo.
   pause
   exit /b 1
 )
 
-rem ---- крок 3: запуск ----
 echo.
 echo ============================================================
-echo   Систему налаштовано. Що ще треба зробити ВРУЧНУ:
-echo     - автоматичний вхід у Windows: netplwiz
-echo     - автозапуск dslrBooth у повний екран: shell:startup
-echo     - клавіша-тригер у dslrBooth = DSLRBOOTH_HOTKEY у .env
-echo     - статичний IP цього ПК на роутері
-echo     - Fully Kiosk на планшеті: http://IP-ПК:8000/kiosk
-echo.
-echo   Повний чек-лист: DEPLOY_CHECKLIST.md
+echo   Подивіться на самоперевірку вище.
+echo     [  OK ]  - все добре
+echo     [ WARN ] - не критично
+echo     [ FAIL ] - треба виправити: відкрийте .env, виправте,
+echo                і запустіть СТАРТ_ТУТ.bat ще раз
 echo ============================================================
-echo.
-echo Запускаю кіоск. Це вікно можна згорнути; закриття = зупинка.
-echo Після перезавантаження ПК кіоск підніметься сам.
 echo.
 pause
-call "%~dp0run.bat"
+
+rem ---- крок 4: запуск, так само як після перезавантаження ПК ----
+set "BID="
+for /f "usebackq delims=" %%i in (`".venv\Scripts\python.exe" -m backend.envtool booth-id`) do set "BID=%%i"
+schtasks /Run /TN "InstaBOX-%BID%" >nul 2>&1
+if not "%errorlevel%"=="0" start "InstaBOX" /min "%~dp0run.bat"
+schtasks /Run /TN "InstaBOX-watchdog-%BID%" >nul 2>&1
+rem  через explorer.exe - щоб Chrome стартував як звичайний користувач, а не
+rem  адміністратор: після перезавантаження він має писати у свій профіль
+explorer.exe "%~dp0start_kiosk.bat"
+
+echo.
+echo   Кіоск запущено. Це вікно можна закрити - точка працює далі
+echo   і сама підніметься після перезавантаження ПК.
+echo.
+echo   Перевірка перемикання вікон - адреса "Window test" вище.
+echo.
+pause

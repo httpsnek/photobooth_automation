@@ -53,6 +53,12 @@ class Controller:
         self._last_booth_event_at = 0.0
         self._triggered_invoice = ""   # in-memory dup guard for _run_session
         self._preflight_block = ""     # last reason the booth refused to sell
+        # breaker: consecutive booth-side failures of PAID sessions
+        self._booth_failures = 0
+        self._breaker_until = 0.0
+        self._breaker_reason = ""
+        self._events_seen = False      # any dslrBooth Trigger ever reached us
+        self._booth_owns_screen = False  # dslrBooth is up for a session
 
     # ───────────────────────── public API ─────────────────────────
     def notify_payment_hint(self) -> None:
@@ -61,6 +67,10 @@ class Controller:
     async def on_booth_event(self, kind: str, data: dict | None = None) -> None:
         """Called by BoothEventRouter for each dslrBooth Trigger callback."""
         self._last_booth_event_at = time.time()
+        if not self._events_seen:
+            self._events_seen = True
+            with contextlib.suppress(Exception):
+                await self.store.set_meta("events_seen", "1")
         item = (kind, data or {})
         try:
             self._booth_events.put_nowait(item)
@@ -91,7 +101,10 @@ class Controller:
         await notify.paused(by)
 
     async def resume(self, by: str = "адмін") -> None:
-        if not self._paused:
+        breaker_was_open = bool(self._breaker_until)
+        self._booth_failures = 0
+        self._breaker_until = 0.0
+        if not self._paused and not breaker_was_open:
             return
         self._paused = False
         await notify.resumed(by)
@@ -140,6 +153,7 @@ class Controller:
 
     async def run(self) -> None:
         self._paper_base = int(await self.store.get_meta("paper_base", "0") or 0)
+        self._events_seen = await self.store.get_meta("events_seen", "0") == "1"
         await notify.startup(VERSION, self.provider.name, self.trigger.name)
         await self._reconcile_on_start()
         self.session.new_cycle()
@@ -147,6 +161,7 @@ class Controller:
         bg = [
             asyncio.create_task(self._heartbeat_loop(), name="heartbeat"),
             asyncio.create_task(self._pending_ops_loop(), name="pending-refunds"),
+            asyncio.create_task(self._screen_guard_loop(), name="screen-guard"),
         ]
         try:
             while not self._stop.is_set():
@@ -240,6 +255,9 @@ class Controller:
         self.session.phase_deadline = time.time() + settings.invoice_ttl_sec
         await self.store.save(self.session)
         self._publish()
+        # a QR nobody can see sells nothing — make sure it is on top
+        if not self._paused:
+            await self._screen_to_kiosk()
         return True
 
     async def _await_payment(self) -> None:
@@ -317,10 +335,10 @@ class Controller:
         # The screen belongs to dslrBooth from here until printing. Raise it
         # BEFORE the trigger: in hotkey mode the keypress has to land in
         # dslrBooth, not in Chrome.
-        await winfocus.raise_booth()
+        await self._screen_to_booth()
 
         if not await self._trigger_with_retries():
-            await self._refund("Кабінка не відповідає (камера або ПЗ)")
+            await self._booth_failed("Кабінка не відповідає (камера або ПЗ)")
             return
         self._triggered_invoice = inv   # camera fired — never re-trigger this one
 
@@ -340,6 +358,7 @@ class Controller:
         await self._sleep(settings.get_ready_sec)
 
         printing_seen = False
+        printing_at = 0.0
         while not self._stop.is_set():
             try:
                 kind, data = await asyncio.wait_for(
@@ -352,7 +371,13 @@ class Controller:
                         f"(зроблено кадрів: {self.session.shot}). Закрито як успішну — перевір друк."
                     )
                     break
-                await self._refund("Кабінка не почала зйомку (тайм-аут)")
+                await self._booth_failed(
+                    "Кабінка не почала зйомку (тайм-аут)" + (
+                        "" if self._events_seen else
+                        ". Від dslrBooth не прийшло ЖОДНОЇ події — найімовірніше "
+                        "не вписано Triggers URL у dslrBooth"
+                    )
+                )
                 return
 
             # once printing has started, stray shoot events are ignored
@@ -378,24 +403,33 @@ class Controller:
                 self._shoot_phase("processing")
             elif kind == "printing":
                 printing_seen = True
+                printing_at = time.time()
                 # shooting and retakes are over — take the glass back
-                await winfocus.raise_kiosk()
+                await self._screen_to_kiosk()
                 await self._enter(State.PRINTING, settings.print_duration_sec)
             elif kind == "booth_error":
-                await self._refund(
+                await self._booth_failed(
                     f"Кабінка повідомила про помилку: {data.get('detail', '') or 'невідомо'}"
                 )
                 return
             elif kind == "session_done":
-                await winfocus.raise_kiosk()   # backstop if `printing` never came
+                await self._screen_to_kiosk()   # backstop if `printing` never came
                 if self.session.shot == 0:
-                    await self._refund("Сесія завершилась без жодного кадру")
+                    await self._booth_failed("Сесія завершилась без жодного кадру")
                     return
                 if not printing_seen:
                     await notify.send(
                         f"⚠️ Сесія <code>{sid}</code> завершилась без події <code>printing</code> "
                         f"— перевір принтер."
                     )
+                else:
+                    # dslrBooth may end the session as soon as the job is
+                    # queued, while the strip is still printing. Keep
+                    # "Друкуємо" up for PRINT_DURATION_SEC, or the guest sees
+                    # "Готово" and then the next guest's QR with no photo yet.
+                    left = settings.print_duration_sec - (time.time() - printing_at)
+                    if left > 0:
+                        await self._sleep(left)
                 break
             # any event refreshes liveness; heartbeat/unknown just loop
 
@@ -429,19 +463,44 @@ class Controller:
         self._shoot_phase("processing")
         await self._sleep(1.0)
 
-        await winfocus.raise_kiosk()
+        await self._screen_to_kiosk()
         await self._enter(State.PRINTING, settings.print_duration_sec)
         await self._sleep(settings.print_duration_sec)
         await self._finish_session()
 
     async def _finish_session(self) -> None:
-        await winfocus.raise_kiosk()   # idempotent: every exit ends on our screen
+        await self._screen_to_kiosk()   # idempotent: every exit ends on our screen
+        self._booth_failures = 0
+        self._breaker_until = 0.0
         self.session.finished_at = time.time()
         self.session.shoot_phase = ""
         self.session.countdown_deadline = None
         await self._enter(State.DONE, settings.done_duration_sec)
         await self.store.save(self.session, prints=1)
         await self._after_print()
+
+    async def _screen_to_booth(self) -> None:
+        self._booth_owns_screen = True
+        await winfocus.raise_booth()
+
+    async def _screen_to_kiosk(self) -> None:
+        await winfocus.raise_kiosk()
+        self._booth_owns_screen = False
+
+    def _booth_busy(self) -> bool:
+        return self._booth_owns_screen or self.session.state in (State.PAID, State.SHOOTING)
+
+    async def _screen_guard_loop(self) -> None:
+        while not self._stop.is_set():
+            try:
+                await asyncio.wait_for(self._stop.wait(), timeout=settings.screen_guard_sec)
+                return
+            except asyncio.TimeoutError:
+                pass
+            if self._paused or self._booth_busy():
+                continue
+            with contextlib.suppress(Exception):
+                await winfocus.reclaim_from_booth(self._booth_busy)
 
     def _shoot_phase(self, phase: str) -> None:
         """Publish a SHOOTING sub-phase change (no DB write — the row stays SHOOTING)."""
@@ -463,9 +522,23 @@ class Controller:
                 await self._sleep(settings.trigger_retry_pause_sec)
         return False
 
+    async def _booth_failed(self, reason: str) -> None:
+        """The paid session failed on the booth side. Refund, and trip the
+        breaker after BOOTH_FAIL_LIMIT in a row: a wrong API password or a
+        missing Triggers URL fails EVERY session, and without the breaker each
+        next guest would pay, wait two minutes and get refunded."""
+        hint = getattr(self.trigger, "last_error", "") or ""
+        if hint and hint not in reason:
+            reason = f"{reason}. {hint}"
+        self._booth_failures += 1
+        if self._booth_failures >= settings.booth_fail_limit:
+            self._breaker_until = time.time() + settings.booth_fail_cooldown_sec
+            self._breaker_reason = reason
+        await self._refund(reason)
+
     async def _refund(self, reason: str) -> None:
         # the guest must see WHY — never leave them staring at dslrBooth
-        await winfocus.raise_kiosk()
+        await self._screen_to_kiosk()
         self.session.error = reason
         await self._enter(State.REFUNDING, None)
         amount = self.session.amount_uah or settings.price_uah
@@ -547,32 +620,49 @@ class Controller:
     # ─────────────────── preflight / recovery ───────────────────
     async def _preflight(self) -> str:
         """Reasons NOT to sell a session right now (checked before every QR).
-        Empty string = good to go."""
+        Empty string = good to go.
+
+        Every problem is reported at once, config errors first: someone
+        setting the booth up from scratch should see the whole list in one
+        go, not fix one thing, restart, and only then meet the next."""
+        problems: list[str] = []
+
+        reason = getattr(self.provider, "reason", "")
+        if self.provider.name == "unconfigured" and reason:
+            problems.append(f"Оплата не налаштована: {reason}")
+
+        if self._breaker_until and time.time() < self._breaker_until:
+            mins = int((self._breaker_until - time.time()) // 60) + 1
+            problems.append(
+                f"Камера не спрацювала {self._booth_failures} рази поспіль — продаж "
+                f"зупинено (повтор через ~{mins} хв або /admin/resume). "
+                f"Причина: {self._breaker_reason}")
+
         left = await self._paper_left()
         if left is not None and left <= 0:
-            return "Закінчився папір — заміни рулон"
+            problems.append("Закінчився папір — заміни рулон")
 
         with contextlib.suppress(Exception):
             scr = await winfocus.display_problem()
             if scr:
-                return scr
+                problems.append(scr)
 
         with contextlib.suppress(Exception):
             pr = await printer.printer_problem()
             if pr:
-                return pr
+                problems.append(pr)
 
         try:
             if not await self.trigger.healthy():
-                return "Фотобудка (dslrBooth) не відповідає"
+                problems.append(self.trigger.unhealthy_reason())
         except Exception as exc:
             log.warning("booth health check errored: %s", exc)
 
-        return ""
+        return "\n".join(problems)
 
     async def _recover_stuck_session(self, reason: str) -> None:
         """The session loop died mid-flow. Refund the guest and get clean."""
-        await winfocus.raise_kiosk()
+        await self._screen_to_kiosk()
         st = self.session.state.value
         inv, sid = self.session.invoice_id, self.session.id
         amount = self.session.amount_uah or settings.price_uah

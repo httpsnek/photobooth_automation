@@ -389,8 +389,17 @@
 
   // ── SSE ──
   var es = null, reloadTimer = null;
+  // Reload ONLY once the backend answers. A blind location.reload() while it
+  // is restarting lands Chrome on its own "can't reach this site" page — no
+  // JS runs there, so the kiosk would stay dead until someone presses F5.
+  function safeReload() {
+    fetch("/health", { cache: "no-store" })
+      .then(function (r) { if (r.ok) location.reload(); else retryReload(); })
+      .catch(retryReload);
+  }
+  function retryReload() { reloadTimer = setTimeout(safeReload, 5000); }
   function scheduleReload() {
-    if (!reloadTimer) reloadTimer = setTimeout(function () { location.reload(); }, 30000);
+    if (!reloadTimer) reloadTimer = setTimeout(safeReload, 30000);
   }
   function cancelReload() {
     if (reloadTimer) { clearTimeout(reloadTimer); reloadTimer = null; }
@@ -500,5 +509,5 @@
 
   render({ state: "CONNECTING" });
   connect();
-  setTimeout(function () { location.reload(); }, 6 * 3600 * 1000);
+  setTimeout(safeReload, 6 * 3600 * 1000);
 })();

@@ -10,8 +10,10 @@ Swap by setting DSLRBOOTH_TRIGGER in .env — the session flow does not change.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import sys
+from urllib.parse import urlparse
 
 import httpx
 
@@ -67,7 +69,8 @@ def _booth_window_foreground() -> bool:
         length = u32.GetWindowTextLengthW(hwnd)
         buf = ctypes.create_unicode_buffer(length + 1)
         u32.GetWindowTextW(hwnd, buf, length + 1)
-        return "dslrbooth" in (buf.value or "").lower()
+        t = (buf.value or "").lower()
+        return "dslrbooth" in t or "lumabooth" in t
     except Exception as exc:
         log.debug("foreground check unavailable: %s", exc)
         return True
@@ -75,6 +78,7 @@ def _booth_window_foreground() -> bool:
 
 class BoothTrigger:
     name = "base"
+    last_error: str = ""     # human hint from the most recent failed start()
 
     async def start(self) -> bool:
         """Fire a photo session. Return True if the command was accepted."""
@@ -82,6 +86,9 @@ class BoothTrigger:
 
     async def healthy(self) -> bool:
         return True
+
+    def unhealthy_reason(self) -> str:
+        return "Фотобудка (dslrBooth) не відповідає"
 
 
 class HotkeyTrigger(BoothTrigger):
@@ -113,6 +120,9 @@ class HotkeyTrigger(BoothTrigger):
                 return False
         return True
 
+    def unhealthy_reason(self) -> str:
+        return (f"dslrBooth не запущено (процес {settings.dslrbooth_proc_names} не знайдено)")
+
 
 class RestTrigger(BoothTrigger):
     name = "rest"
@@ -131,20 +141,42 @@ class RestTrigger(BoothTrigger):
     async def start(self) -> bool:
         try:
             r = await self._client.get(settings.dslrbooth_api_url, params=self._params())
-            ok = r.status_code == 200
-            if not ok:
-                log.error("dslrBooth REST %s: %s", r.status_code, r.text[:200])
-            return ok
         except Exception as exc:
             log.error("dslrBooth REST unreachable: %s", exc)
+            self.last_error = "API dslrBooth недоступний — dslrBooth запущено? API увімкнено?"
             return False
+        if r.status_code == 200:
+            self.last_error = ""
+            return True
+        log.error("dslrBooth REST %s: %s", r.status_code, r.text[:200])
+        if r.status_code in (401, 403):
+            self.last_error = "dslrBooth відхилив пароль — перевір DSLRBOOTH_API_PASSWORD у .env"
+        else:
+            self.last_error = f"dslrBooth відповів HTTP {r.status_code}"
+        return False
+
+    def _endpoint(self) -> tuple[str, int]:
+        u = urlparse(settings.dslrbooth_api_url)
+        return (u.hostname or "127.0.0.1"), (u.port or (443 if u.scheme == "https" else 80))
 
     async def healthy(self) -> bool:
+        # A bare TCP connect, never a request to take_photo: an undocumented
+        # probe mode on the START command is one firmware quirk away from
+        # firing a free session every few seconds.
+        host, port = self._endpoint()
         try:
-            r = await self._client.get(settings.dslrbooth_api_url, params={"mode": "status"})
-            return r.status_code < 500
+            _, writer = await asyncio.wait_for(asyncio.open_connection(host, port), timeout=3)
         except Exception:
             return False
+        writer.close()
+        with contextlib.suppress(Exception):
+            await writer.wait_closed()
+        return True
+
+    def unhealthy_reason(self) -> str:
+        host, port = self._endpoint()
+        return (f"dslrBooth: API недоступний ({host}:{port}). "
+                "Запусти dslrBooth і перевір, що API увімкнено в налаштуваннях")
 
     async def aclose(self) -> None:
         await self._client.aclose()

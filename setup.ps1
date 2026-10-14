@@ -1,131 +1,161 @@
 <#
-  InstaBOX kiosk - one-shot installer for a new booth PC (Windows).
+  InstaBOX kiosk - one-shot installer for a booth PC (Windows).
 
-  Run from an elevated PowerShell in the project folder:
-      powershell -ExecutionPolicy Bypass -File setup.ps1
+  Normally started by START_TUT.bat (the Cyrillic-named file). By hand:
+      powershell -ExecutionPolicy Bypass -File setup.ps1     (as administrator)
+
+  Safe to run again at any time: every step replaces what it made before.
 
   It will:
-    1. check Python / port
+    1. find a real Python 3.10+
     2. create .venv and install dependencies
-    3. create .env from .env.example and ask for this booth's basics
-    4. register a Scheduled Task that starts the kiosk at logon and
-       restarts it if it ever dies
+    3. prepare .env (and generate the admin / event tokens)
+    4. register Scheduled Tasks: backend + watchdog at logon, kiosk browser
+    5. open the port on the firewall for the owner's phone
+    6. disable sleep / USB suspend, laptop lid = do nothing
+    7. run the self-check and print the addresses needed next
 #>
 
 $ErrorActionPreference = "Stop"
 Set-Location -Path $PSScriptRoot
 
 function Section($t) { Write-Host "`n=== $t ===" -ForegroundColor Cyan }
-
-# -- 1. environment checks ---------------------------------------
-Section "Checking environment"
-
-$py = Get-Command python -ErrorAction SilentlyContinue
-if (-not $py) { $py = Get-Command py -ErrorAction SilentlyContinue }
-if (-not $py) {
-  Write-Host "Python not found. Install Python 3.10+ from https://python.org (tick 'Add to PATH')." -ForegroundColor Red
+function Fail($msg) {
+  Write-Host ""
+  Write-Host $msg -ForegroundColor Red
+  Write-Host ""
   exit 1
 }
-$ver = & $py.Source --version
-Write-Host "Found $ver at $($py.Source)"
-
-$port = 8000
-if (Test-Path ".env") {
-  $m = Select-String -Path ".env" -Pattern '^\s*PORT\s*=\s*(\d+)' -ErrorAction SilentlyContinue
-  if ($m) { $port = [int]$m.Matches[0].Groups[1].Value }
+# Windows PowerShell 5.1 turns a native command's redirected stderr into
+# error records, and under "Stop" the first one aborts the whole script -
+# e.g. on a first install, where "task not found" goes to stderr. Run native
+# tools through this so a chatty stderr never kills the installer.
+function Native([scriptblock]$block) {
+  $old = $ErrorActionPreference
+  $ErrorActionPreference = "Continue"
+  try { & $block } finally { $ErrorActionPreference = $old }
 }
-$busy = Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue
-if ($busy) { Write-Host "Warning: port $port is already in use (pid $($busy.OwningProcess))." -ForegroundColor Yellow }
 
-$ip = (Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue |
-       Where-Object { $_.IPAddress -notlike "169.*" -and $_.IPAddress -ne "127.0.0.1" } |
-       Select-Object -First 1).IPAddress
+$admin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()
+          ).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+if (-not $admin) {
+  Fail "Run this as administrator (right-click START_TUT.bat or setup.bat -> Run as administrator)."
+}
 
-# -- 2. venv + deps ----------------------------------------------
+# -- 1. Python ----------------------------------------------------
+Section "Checking Python"
+
+$pyExe = $null
+foreach ($name in @("py", "python", "python3")) {
+  $cmd = Get-Command $name -ErrorAction SilentlyContinue
+  if (-not $cmd) { continue }
+  # Windows 10/11 ship python.exe in WindowsApps as a stub that only opens
+  # the Microsoft Store. It looks like Python but cannot create a venv.
+  if ($cmd.Source -like "*\WindowsApps\*") { continue }
+  $v = Native { & $cmd.Source -c "import sys; print('%d.%d' % sys.version_info[:2])" 2>$null }
+  if ($LASTEXITCODE -ne 0 -or -not $v) { continue }
+  $parts = "$v".Trim().Split(".")
+  if ([int]$parts[0] -eq 3 -and [int]$parts[1] -ge 10) { $pyExe = $cmd.Source; break }
+  Write-Host "Skipping Python $v at $($cmd.Source) - need 3.10 or newer." -ForegroundColor Yellow
+}
+if (-not $pyExe) {
+  Fail ("Python 3.10+ not found.`n" +
+        "Install it from https://www.python.org/downloads/ and TICK 'Add python.exe to PATH',`n" +
+        "then run this installer again.")
+}
+Write-Host "Using Python $v at $pyExe"
+
+# -- 2. venv + deps -----------------------------------------------
 Section "Python environment"
-if (-not (Test-Path ".venv\Scripts\python.exe")) {
-  & $py.Source -m venv .venv
+$venvPy = Join-Path $PSScriptRoot ".venv\Scripts\python.exe"
+if (-not (Test-Path $venvPy)) {
+  Native { & $pyExe -m venv .venv }
+  if (-not (Test-Path $venvPy)) { Fail "Could not create .venv with $pyExe." }
 }
-& ".venv\Scripts\python.exe" -m pip install --upgrade pip --quiet
-& ".venv\Scripts\python.exe" -m pip install -r requirements.txt --quiet
+Write-Host "Installing dependencies (needs internet, ~1-2 min)..."
+Native { & $venvPy -m pip install -r requirements.txt --disable-pip-version-check --quiet }
+if ($LASTEXITCODE -ne 0) {
+  Fail "Dependency install FAILED (pip exit $LASTEXITCODE). Check the internet connection and run again."
+}
 Write-Host "Dependencies installed."
 
-# -- 3. .env -----------------------------------------------------
+# -- 3. .env ------------------------------------------------------
 Section "Booth configuration (.env)"
-if (-not (Test-Path ".env")) {
-  Copy-Item ".env.example" ".env"
-  Write-Host "Created .env from .env.example."
+$envPath = Join-Path $PSScriptRoot ".env"
+$utf8 = New-Object System.Text.UTF8Encoding $false
 
-  function Ask($key, $prompt, $default) {
-    if ($default) { $p = "$prompt [$default]" } else { $p = $prompt }
-    $v = Read-Host $p
-    if (-not $v) { $v = $default }
-    if ($v -ne $null) {
-      $esc = [regex]::Escape($key)
-      (Get-Content ".env") -replace "^\s*$esc\s*=.*", "$key=$v" | Set-Content ".env"
-    }
+function Set-EnvValue($key, $value) {
+  $text = [IO.File]::ReadAllText($envPath, [Text.Encoding]::UTF8)
+  $line = "$key=$value"
+  $pattern = "(?m)^[ \t]*" + [regex]::Escape($key) + "[ \t]*=[^\r\n]*"
+  if ([regex]::IsMatch($text, $pattern)) {
+    $text = [regex]::Replace($text, $pattern, [System.Text.RegularExpressions.MatchEvaluator]{ param($m) $line })
+  } else {
+    $text = $text.TrimEnd() + "`r`n$line`r`n"
   }
+  [IO.File]::WriteAllText($envPath, $text, $utf8)
+}
 
-  Ask "BOOTH_ID"                  "Booth id (unique, e.g. booth-002)"          "booth-001"
-  Ask "BOOTH_NAME"               "Booth name / location"                      "InstaBOX"
-  Ask "SUPPORT_PHONE"            "Support phone, blank if none"               ""
-  Ask "SUPPORT_TELEGRAM"        "Support Telegram @handle or t.me link"      ""
-  Ask "PRICE_UAH"               "Price per session, UAH"                     "150"
-  Ask "PAYMENT_PROVIDER"        "Payment provider (mock | monobank)"         "mock"
-  Ask "BANK_TOKEN"              "Monobank acquiring X-Token (blank for now)" ""
-  Ask "TELEGRAM_ALERTS_BOT_TOKEN" "Telegram bot token (blank to skip)"       ""
-  Ask "TELEGRAM_ADMIN_CHAT_ID"  "Telegram admin chat id (blank to skip)"     ""
-  Ask "DSLRBOOTH_HOTKEY"        "dslrBooth trigger key"                      "space"
-  Ask "ADMIN_TOKEN"             "Admin token for /admin (blank to skip)"     ([guid]::NewGuid().ToString('N').Substring(0,12))
+if (-not (Test-Path $envPath)) {
+  # the file we ship with real values, dropped in without renaming
+  $shipped = @("InstaBOX.env.txt", ".env.txt") | Where-Object { Test-Path (Join-Path $PSScriptRoot $_) } | Select-Object -First 1
+  if ($shipped) {
+    Copy-Item (Join-Path $PSScriptRoot $shipped) $envPath
+    Write-Host "Created .env from $shipped."
+  } else {
+    Copy-Item (Join-Path $PSScriptRoot ".env.example") $envPath
+    Write-Host "Created .env from .env.example - answer a few questions (Enter = keep default):"
+    function Ask($key, $prompt, $default) {
+      if ($default) { $p = "$prompt [$default]" } else { $p = $prompt }
+      $v = Read-Host $p
+      if (-not $v) { $v = $default }
+      if ($v) { Set-EnvValue $key $v.Trim() }
+    }
+    Ask "BANK_TOKEN"                "Monobank acquiring X-Token"              ""
+    Ask "DSLRBOOTH_API_PASSWORD"    "dslrBooth API password"                  ""
+    Ask "SUPPORT_TELEGRAM"          "Support Telegram (@username)"            ""
+    Ask "TELEGRAM_ALERTS_BOT_TOKEN" "Telegram bot token (blank to skip)"      ""
+    Ask "TELEGRAM_ADMIN_CHAT_ID"    "Telegram chat id (blank to skip)"        ""
+    Ask "PAPER_CAPACITY"            "Prints per paper roll"                   "400"
+    Ask "PRICE_UAH"                 "Price per session, UAH"                  "150"
+  }
 } else {
-  Write-Host ".env already exists - leaving it untouched."
+  Write-Host ".env found - keeping your values."
 }
 
-# nag about anything important that's still blank
-$envText = Get-Content ".env" -Raw
-if (($envText -notmatch '(?m)^\s*SUPPORT_PHONE\s*=\s*\S') -and ($envText -notmatch '(?m)^\s*SUPPORT_TELEGRAM\s*=\s*\S')) {
-  Write-Host "Warning: no SUPPORT_PHONE / SUPPORT_TELEGRAM - stranded customers have nowhere to turn on the error screen." -ForegroundColor Yellow
-}
-if ($envText -match '(?m)^\s*PAYMENT_PROVIDER\s*=\s*monobank' -and $envText -notmatch '(?m)^\s*BANK_TOKEN\s*=\s*\S') {
-  Write-Host "Warning: PAYMENT_PROVIDER=monobank but BANK_TOKEN is empty." -ForegroundColor Yellow
-}
+Native { & $venvPy -m backend.envtool ensure-tokens }
+$boothId = (Native { & $venvPy -m backend.envtool booth-id }) | Select-Object -Last 1
+if (-not $boothId) { $boothId = "booth-local" }
+$boothId = "$boothId".Trim()
+$portOut = (Native { & $venvPy -c "from backend.config import settings; print(settings.port)" }) | Select-Object -Last 1
+$port = 8000
+if ("$portOut".Trim() -match '^\d+$') { $port = [int]"$portOut".Trim() }
+Write-Host "Booth id: $boothId   port: $port"
 
-# -- 4. autostart via Scheduled Task -----------------------------
+# -- 4. autostart -------------------------------------------------
 Section "Autostart"
-$boothId = (Select-String -Path ".env" -Pattern '^\s*BOOTH_ID\s*=\s*(.+)$').Matches[0].Groups[1].Value.Trim()
-$taskName = "InstaBOX-$boothId"
 $runBat = Join-Path $PSScriptRoot "run.bat"
-
-schtasks /Query /TN $taskName >$null 2>&1
-if ($LASTEXITCODE -eq 0) { schtasks /Delete /TN $taskName /F >$null }
-
 $set = New-ScheduledTaskSettingsSet -RestartCount 999 -RestartInterval (New-TimeSpan -Minutes 1) `
          -MultipleInstances IgnoreNew -ExecutionTimeLimit ([TimeSpan]::Zero) `
          -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
 $trigger = New-ScheduledTaskTrigger -AtLogOn
 
+# -Force replaces an existing task of the same name, so re-running is safe
+$taskName = "InstaBOX-$boothId"
 $action = New-ScheduledTaskAction -Execute $runBat -WorkingDirectory $PSScriptRoot
 Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Settings $set `
   -RunLevel Highest -Force | Out-Null
-Write-Host "Scheduled task '$taskName' registered (starts at logon, auto-restarts)."
+Write-Host "Task '$taskName' registered (backend, starts at logon, auto-restarts)."
 
-# external watchdog - restarts the backend if it wedges (run.bat also starts it;
-# a pidfile lock keeps it single). Own task so it survives even if run.bat is killed.
 $wdName = "InstaBOX-watchdog-$boothId"
 $wdPy   = Join-Path $PSScriptRoot "watchdog.py"
-$venvPy = Join-Path $PSScriptRoot ".venv\Scripts\python.exe"
-if ((Test-Path $wdPy) -and (Test-Path $venvPy)) {
-  schtasks /Query /TN $wdName >$null 2>&1
-  if ($LASTEXITCODE -eq 0) { schtasks /Delete /TN $wdName /F >$null }
-  $wdAction = New-ScheduledTaskAction -Execute $venvPy -Argument "`"$wdPy`"" `
-                -WorkingDirectory $PSScriptRoot
+if (Test-Path $wdPy) {
+  $wdAction = New-ScheduledTaskAction -Execute $venvPy -Argument "`"$wdPy`"" -WorkingDirectory $PSScriptRoot
   Register-ScheduledTask -TaskName $wdName -Action $wdAction -Trigger $trigger -Settings $set `
     -RunLevel Highest -Force | Out-Null
-  Write-Host "Scheduled task '$wdName' registered (external process watchdog)."
+  Write-Host "Task '$wdName' registered (external watchdog)."
 }
 
-# kiosk browser - Chrome owns the touch screen except during the shoot, when
-# the backend raises dslrBooth for its own live view / countdown / retake.
 $kioskBat = Join-Path $PSScriptRoot "start_kiosk.bat"
 if (Test-Path $kioskBat) {
   try {
@@ -137,52 +167,55 @@ if (Test-Path $kioskBat) {
     $sc.WorkingDirectory = $PSScriptRoot
     $sc.WindowStyle = 7
     $sc.Save()
-    Write-Host "Kiosk browser starts at logon (shortcut: $lnk)."
-    Write-Host "  NOTE: that is the CURRENT user's Startup folder. If the booth" -ForegroundColor Yellow
-    Write-Host "  auto-logs-in as a different user, copy the shortcut there." -ForegroundColor Yellow
+    Write-Host "Kiosk browser starts at logon ($lnk)."
   } catch {
-    Write-Host "Could not create the kiosk shortcut - add start_kiosk.bat to shell:startup by hand." -ForegroundColor Yellow
+    Write-Host "Could not create the kiosk shortcut - put start_kiosk.bat into shell:startup by hand." -ForegroundColor Yellow
   }
 }
 
-# -- 5. firewall - owner's phone can reach /status on the LAN ---
+# -- 5. firewall --------------------------------------------------
 Section "Firewall"
 $fwName = "InstaBOX-$port"
-netsh advfirewall firewall delete rule "name=$fwName" >$null 2>&1
-netsh advfirewall firewall add rule "name=$fwName" dir=in action=allow protocol=TCP "localport=$port" profile=any | Out-Null
-Write-Host "Inbound TCP $port allowed as rule '$fwName' (so the tablet can open the kiosk)."
-
-# -- 6. power - a kiosk PC must never sleep or suspend the camera -
-Section "Power settings"
 try {
+  Get-NetFirewallRule -DisplayName $fwName -ErrorAction SilentlyContinue | Remove-NetFirewallRule -ErrorAction SilentlyContinue
+  New-NetFirewallRule -DisplayName $fwName -Direction Inbound -Protocol TCP -LocalPort $port `
+    -Action Allow -Profile Any | Out-Null
+  Write-Host "Inbound TCP $port allowed (owner's phone can open /status)."
+} catch {
+  Write-Host "Could not add the firewall rule - only the booth PC itself will reach the kiosk." -ForegroundColor Yellow
+}
+
+# -- 6. power -----------------------------------------------------
+Section "Power settings"
+Native {
   powercfg /change standby-timeout-ac 0
   powercfg /change standby-timeout-dc 0
   powercfg /change hibernate-timeout-ac 0
   powercfg /change hibernate-timeout-dc 0
   powercfg /change monitor-timeout-ac 0
   powercfg /change monitor-timeout-dc 0
-  # USB selective suspend OFF (both power schemes) - keeps the camera stable
+  # USB selective suspend OFF - keeps the camera connected
   powercfg /setacvalueindex SCHEME_CURRENT 2a737441-1930-4402-8d77-b2bebba308a3 48e6b7a6-50f5-4782-a5d4-53bb8f07e226 0
   powercfg /setdcvalueindex SCHEME_CURRENT 2a737441-1930-4402-8d77-b2bebba308a3 48e6b7a6-50f5-4782-a5d4-53bb8f07e226 0
+  # closing the laptop lid = do nothing: the touch monitor becomes the only screen
+  powercfg /setacvalueindex SCHEME_CURRENT 4f971e89-eebd-4455-a8de-9e59040e7347 5ca83367-6e45-459f-a27b-476b1d01c936 0
+  powercfg /setdcvalueindex SCHEME_CURRENT 4f971e89-eebd-4455-a8de-9e59040e7347 5ca83367-6e45-459f-a27b-476b1d01c936 0
   powercfg /setactive SCHEME_CURRENT
-  Write-Host "Sleep / hibernate / monitor-off / USB-selective-suspend disabled."
-} catch {
-  Write-Host "Could not change power settings automatically - do it in Control Panel > Power Options." -ForegroundColor Yellow
 }
+Write-Host "Sleep, hibernate, monitor-off and USB suspend disabled; lid close = do nothing."
 
-# -- done -------------------------------------------------------
-Section "Done"
-Write-Host "Start now:   schtasks /Run /TN $taskName"
-if ((Test-Path $wdPy) -and (Test-Path $venvPy)) { Write-Host "             schtasks /Run /TN $wdName" }
-Write-Host "Kiosk URL:   http://localhost:$port/kiosk   (Chrome opens this at logon)"
-if ($ip) { Write-Host "Status from the owner's phone:  http://$ip`:$port/status" -ForegroundColor Green }
+# -- 7. self-check + what next ------------------------------------
+Section "Self-check"
+Native { & $venvPy -m backend.selfcheck }
+
+Section "Addresses"
+$ip = (Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue |
+       Where-Object { $_.IPAddress -notlike "169.*" -and $_.IPAddress -ne "127.0.0.1" } |
+       Select-Object -First 1).IPAddress
+Native { & $venvPy -m backend.envtool summary $ip }
+
 Write-Host ""
-Write-Host "Still MANUAL (see DEPLOY.md):" -ForegroundColor Yellow
-Write-Host "  * Windows auto-login (netplwiz) - required, task runs -AtLogOn" -ForegroundColor Yellow
-Write-Host "  * laptop lid: Power Options -> 'Do nothing' on close, so Windows" -ForegroundColor Yellow
-Write-Host "    runs on the touch monitor as the ONLY display" -ForegroundColor Yellow
-Write-Host "  * dslrBooth: fullscreen autostart, REST API on, Triggers URL set," -ForegroundColor Yellow
-Write-Host "    Live View ON, per-photo review with Retake ~5s, sharing screens OFF," -ForegroundColor Yellow
-Write-Host "    'always on top' OFF (or our QR can never cover it)" -ForegroundColor Yellow
-Write-Host "  * pause Windows Update active hours / defer restarts" -ForegroundColor Yellow
-Write-Host "  * static DHCP lease for this PC on the router" -ForegroundColor Yellow
+Write-Host "Still MANUAL:" -ForegroundColor Yellow
+Write-Host "  * Windows auto-login (netplwiz) - without it nothing starts after a reboot" -ForegroundColor Yellow
+Write-Host "  * dslrBooth: API on, Triggers URL (see above), Live View on, Retake ~5s," -ForegroundColor Yellow
+Write-Host "    sharing screens off, 'always on top' OFF, dslrBooth in shell:startup" -ForegroundColor Yellow

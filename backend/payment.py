@@ -8,6 +8,8 @@ Normalized status vocabulary used by the rest of the app:
 """
 from __future__ import annotations
 
+import os
+
 import base64
 import logging
 import time
@@ -181,7 +183,44 @@ class MonobankProvider(PaymentProvider):
         await self._client.aclose()
 
 
+class UnconfiguredProvider(PaymentProvider):
+    """Stands in when the acquirer can't work as configured.
+
+    Falling back to MockProvider here used to put a mistyped booth into test
+    mode — a QR that takes no money, with no warning. Refusing to sell instead
+    lands the booth in OUT_OF_SERVICE with the exact reason in Telegram.
+    """
+
+    name = "unconfigured"
+
+    def __init__(self, reason: str) -> None:
+        self.reason = reason
+
+    async def create_invoice(self, amount_uah: int, reference: str) -> Invoice:
+        raise PaymentError(self.reason)
+
+    async def get_status(self, invoice_id: str) -> str:
+        return FAILURE
+
+    async def refund(self, invoice_id: str, amount_uah: int) -> bool:
+        return False
+
+
 def build_provider() -> PaymentProvider:
-    if settings.payment_provider == "monobank":
+    from .config import ENV_FILE
+    if ENV_FILE is None and "PAYMENT_PROVIDER" not in os.environ:
+        # no settings file at all: defaults would be test mode with a QR that
+        # takes no money. Refuse to sell and say why instead.
+        return UnconfiguredProvider("немає файлу .env поруч із СТАРТ_ТУТ.bat")
+    p = settings.payment_provider
+    if p == "monobank":
+        if not settings.bank_token:
+            return UnconfiguredProvider("BANK_TOKEN порожній у .env")
         return MonobankProvider()
-    return MockProvider()
+    if p == "mock":
+        return MockProvider()
+    if not p:
+        return UnconfiguredProvider("PAYMENT_PROVIDER не вказано у .env (має бути monobank)")
+    return UnconfiguredProvider(
+        f"PAYMENT_PROVIDER='{p}' — має бути monobank"
+    )

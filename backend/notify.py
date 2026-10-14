@@ -5,7 +5,9 @@ fleet knows instantly which machine needs attention.
 """
 from __future__ import annotations
 
+import html
 import logging
+import re
 
 import httpx
 
@@ -13,7 +15,18 @@ from .config import settings
 
 log = logging.getLogger("notify")
 
-_TAG = f"🅱️ <b>{settings.booth_name}</b> · <code>{settings.booth_id}</code>"
+def esc(v: object) -> str:
+    """Escape a value for Telegram HTML (names, reasons, exception text)."""
+    return html.escape(str(v), quote=False)
+
+
+# BOOTH_NAME is typed by the client: "Фото & Кава" unescaped would make
+# Telegram reject EVERY message with "can't parse entities".
+_TAG = f"🅱️ <b>{esc(settings.booth_name)}</b> · <code>{esc(settings.booth_id)}</code>"
+
+
+def _plain(text: str) -> str:
+    return html.unescape(re.sub(r"</?[a-zA-Z][^>]*>", "", text))
 
 
 async def send(text: str) -> None:
@@ -24,15 +37,19 @@ async def send(text: str) -> None:
     url = f"https://api.telegram.org/bot{settings.telegram_bot_token}/sendMessage"
     try:
         async with httpx.AsyncClient(timeout=8.0) as client:
-            r = await client.post(
-                url,
-                json={
-                    "chat_id": settings.telegram_chat_id,
-                    "text": body,
-                    "parse_mode": "HTML",
-                    "disable_web_page_preview": True,
-                },
-            )
+            payload = {
+                "chat_id": settings.telegram_chat_id,
+                "text": body,
+                "parse_mode": "HTML",
+                "disable_web_page_preview": True,
+            }
+            r = await client.post(url, json=payload)
+            if r.status_code == 400 and "parse" in r.text.lower():
+                # some interpolated text broke the markup — an alert delivered
+                # as plain text beats an alert silently dropped
+                payload.pop("parse_mode")
+                payload["text"] = _plain(body)
+                r = await client.post(url, json=payload)
             if r.status_code != 200:
                 log.warning("telegram %s: %s", r.status_code, r.text[:200])
     except Exception as exc:  # never let a notification failure break the flow
@@ -53,7 +70,7 @@ async def payment_received(amount_uah: int, session_id: str) -> None:
 async def session_failed(amount_uah: int, session_id: str, reason: str) -> None:
     await send(
         f"⚠️ <b>Оплата пройшла, а зйомка — ні</b>\n"
-        f"Сесія <code>{session_id}</code>\nПричина: {reason}\n"
+        f"Сесія <code>{session_id}</code>\nПричина: {esc(reason)}\n"
         f"Повертаю {amount_uah} {settings.currency} на картку."
     )
 
@@ -66,7 +83,7 @@ async def refund_result(session_id: str, ok: bool) -> None:
 
 
 async def out_of_service(reason: str) -> None:
-    await send(f"🛑 <b>Кабінка не працює</b>\n{reason}")
+    await send(f"🛑 <b>Кабінка не працює</b>\n{esc(reason)}")
 
 
 async def back_online() -> None:
