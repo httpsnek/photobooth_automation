@@ -77,15 +77,25 @@ def _booth_window_foreground() -> bool:
 
 
 def _start_url(url: str) -> str:
-    """The API's start command is /api/start?mode=print. Early builds of this
-    project shipped /api/take_photo in .env — an endpoint LumaBooth does not
-    have — so map it here instead of making every booth edit its .env."""
+    """Normalise DSLRBOOTH_API_URL.
+
+    - The start command is /api/start?mode=print. Early builds shipped
+      /api/take_photo in .env — an endpoint LumaBooth does not have — so map it
+      instead of making every booth edit its .env.
+    - "localhost" becomes 127.0.0.1. On Windows "localhost" resolves to ::1
+      first, but LumaBooth listens on IPv4 (0.0.0.0:1500). The refused IPv6
+      attempt costs seconds, and on the first real booth the health probe ran
+      out of time and reported "API unreachable" while the port was open.
+    """
     u = urlparse(url)
     if u.path.rstrip("/").endswith("/take_photo"):
-        fixed = u._replace(path=u.path.rstrip("/")[: -len("take_photo")] + "start").geturl()
+        u = u._replace(path=u.path.rstrip("/")[: -len("take_photo")] + "start")
+    if (u.hostname or "").lower() == "localhost":
+        u = u._replace(netloc="127.0.0.1" + (f":{u.port}" if u.port else ""))
+    fixed = u.geturl()
+    if fixed != url:
         log.info("DSLRBOOTH_API_URL %s -> %s", url, fixed)
-        return fixed
-    return url
+    return fixed
 
 
 class BoothTrigger:
@@ -142,6 +152,7 @@ class RestTrigger(BoothTrigger):
     def __init__(self) -> None:
         self._client = httpx.AsyncClient(timeout=httpx.Timeout(8.0))
         self.url = _start_url(settings.dslrbooth_api_url)
+        self.probe_error = ""
 
     def _params(self, extra: dict | None = None) -> dict:
         p = {"mode": settings.dslrbooth_api_mode or "print"}
@@ -173,14 +184,19 @@ class RestTrigger(BoothTrigger):
         return (u.hostname or "127.0.0.1"), (u.port or (443 if u.scheme == "https" else 80))
 
     async def healthy(self) -> bool:
-        # A bare TCP connect, never a request to take_photo: an undocumented
-        # probe mode on the START command is one firmware quirk away from
-        # firing a free session every few seconds.
+        # A bare TCP connect, never a request to the start command: a probe on
+        # it is one firmware quirk away from firing a free session every few
+        # seconds.
         host, port = self._endpoint()
         try:
-            _, writer = await asyncio.wait_for(asyncio.open_connection(host, port), timeout=3)
-        except Exception:
+            _, writer = await asyncio.wait_for(asyncio.open_connection(host, port), timeout=6)
+        except asyncio.TimeoutError:
+            self.probe_error = "таймаут з'єднання"
             return False
+        except Exception as exc:
+            self.probe_error = str(exc) or type(exc).__name__
+            return False
+        self.probe_error = ""
         writer.close()
         with contextlib.suppress(Exception):
             await writer.wait_closed()
@@ -188,7 +204,8 @@ class RestTrigger(BoothTrigger):
 
     def unhealthy_reason(self) -> str:
         host, port = self._endpoint()
-        return (f"dslrBooth: API недоступний ({host}:{port}). "
+        why = f" [{self.probe_error}]" if self.probe_error else ""
+        return (f"dslrBooth: API недоступний ({host}:{port}){why}. "
                 "Запусти dslrBooth і перевір, що API увімкнено в налаштуваннях")
 
     async def aclose(self) -> None:

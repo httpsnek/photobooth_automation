@@ -700,3 +700,37 @@ async def test_rest_start_matches_lumabooth_api():
     for u in seen:
         assert u.path == "/api/start", u
         assert u.params["mode"] == "print" and u.params["password"] == "u5h3"
+
+
+@pytest.mark.parametrize("raw,want", [
+    ("http://localhost:1500/api/take_photo", "http://127.0.0.1:1500/api/start"),
+    ("http://localhost:1500/api/start", "http://127.0.0.1:1500/api/start"),
+    ("http://LOCALHOST:1500/api/start", "http://127.0.0.1:1500/api/start"),
+    ("http://127.0.0.1:1500/api/start", "http://127.0.0.1:1500/api/start"),
+    ("http://192.168.1.5:1500/api/start", "http://192.168.1.5:1500/api/start"),
+])
+def test_api_url_normalised(raw, want):
+    # Windows resolves "localhost" to ::1 first while LumaBooth listens on
+    # IPv4 only: the health probe timed out although 0.0.0.0:1500 was open
+    from backend.dslrbooth import _start_url
+    assert _start_url(raw) == want
+
+
+async def test_health_probe_reaches_an_ipv4_only_listener_via_localhost():
+    from backend.dslrbooth import RestTrigger
+
+    async def on_conn(reader, writer):
+        writer.close()
+
+    server = await asyncio.start_server(on_conn, "127.0.0.1", 0)     # IPv4 only, like LumaBooth
+    port = server.sockets[0].getsockname()[1]
+    with _override(dslrbooth_api_url=f"http://localhost:{port}/api/start"):
+        trig = RestTrigger()
+        assert trig._endpoint() == ("127.0.0.1", port)
+        assert await trig.healthy() is True
+        server.close()
+        await server.wait_closed()
+        assert await trig.healthy() is False
+        assert trig.probe_error, "a failed probe must say why, not just 'unreachable'"
+        assert trig.probe_error in trig.unhealthy_reason()
+        await trig.aclose()
