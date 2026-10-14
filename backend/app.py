@@ -219,7 +219,10 @@ async def status_page(request: Request) -> HTMLResponse:
 h1{{font-size:19px}} table{{width:100%;border-collapse:collapse}}
 th{{text-align:left;color:#8a8a8e;font-weight:600;padding:8px 12px 8px 0;white-space:nowrap;vertical-align:top}}
 td{{padding:8px 0}} tr+tr{{border-top:1px solid #eee}}</style>
-<h1>{s['booth_name']} · статус</h1><table>{body}</table>""",
+<h1>{s['booth_name']} · статус</h1><table>{body}</table>
+<p style="margin-top:20px;color:#8a8a8e;font-size:14px">
+Перевірка перемикання вікон:
+<code>/admin/test-windows?token=&lt;ADMIN_TOKEN&gt;</code></p>""",
     )
 
 
@@ -229,6 +232,54 @@ def _admin_ok(request: Request) -> bool:
         return False
     given = request.query_params.get("token") or request.headers.get("X-Admin-Token")
     return given == settings.admin_token
+
+
+@app.get("/admin/test-windows", response_class=HTMLResponse, include_in_schema=False)
+async def admin_test_windows(request: Request) -> Response:
+    """On-site check of the riskiest moving part, without spending a hryvnia.
+
+    Best opened from a phone on the same network: the booth screen then shows
+    the actual handoff while the phone reports what happened.
+    """
+    if not _admin_ok(request):
+        return HTMLResponse("<h1>401 — невірний token</h1>", status_code=401)
+
+    from . import winfocus
+    if not winfocus._IS_WIN:
+        return HTMLResponse("<meta charset=utf-8><h1>Перемикання вікон працює лише у Windows</h1>")
+    if not settings.window_switch_enabled:
+        return HTMLResponse("<meta charset=utf-8><h1>WINDOW_SWITCH_ENABLED=0</h1>"
+                            "<p>Перемикання вимкнено в .env — увімкни, щоб перевірити.</p>")
+
+    monitors = await asyncio.to_thread(winfocus.display_count)
+    booth_ok = await winfocus.raise_booth()
+    await asyncio.sleep(4)
+    kiosk_ok = await winfocus.raise_kiosk()
+
+    def row(ok: bool, name: str, hint: str) -> str:
+        mark = "✅" if ok else "❌"
+        return f"<tr><td>{mark}</td><td><b>{name}</b></td><td>{'' if ok else hint}</td></tr>"
+
+    body = f"""<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<style>body{{font:16px/1.5 system-ui;margin:0;padding:24px;background:#fff;color:#111}}
+h1{{font-size:20px;margin:0 0 4px}}p{{color:#666;margin:0 0 20px}}
+table{{border-collapse:collapse;width:100%;max-width:640px}}
+td{{padding:10px 8px;border-bottom:1px solid #eee;vertical-align:top}}
+td:first-child{{width:28px}}td:last-child{{color:#b00;font-size:14px}}</style>
+<h1>Перевірка перемикання вікон</h1>
+<p>Монiторiв у системi: <b>{monitors or "невідомо"}</b></p>
+<table>
+{row(bool(monitors), "Екран знайдено", "Windows не бачить жодного монітора")}
+{row(booth_ok, "Вікно dslrBooth піднялось",
+     "Не знайдено або не виходить на передній план. Запусти dslrBooth; "
+     "перевір, що в ньому ВИМКНЕНО «always on top».")}
+{row(kiosk_ok, "Вікно кіоску повернулось",
+     f"Не знайдено вікно з назвою «{settings.kiosk_title}». "
+     "Запусти start_kiosk.bat; назва береться з BOOTH_NAME.")}
+</table>
+<p style="margin-top:24px">Якщо обидва рядки зеленi — зйомка i повернення на наш екран
+працюватимуть. Повтори: онови цю сторiнку.</p>"""
+    return HTMLResponse(body)
 
 
 @app.post("/admin/{action}")
